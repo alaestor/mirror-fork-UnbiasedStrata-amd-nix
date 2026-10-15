@@ -388,7 +388,7 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
             for (int64_t r = 0; r < FF; ++r) tk[(size_t) r] = (int32_t) (FF - 1 - r);   // rows in reverse order
             cudaMemcpy(dtk, tk.data(), tk.size() * 4, cudaMemcpyHostToDevice);
             double dq_err = 0.0;
-            size_t differ = 0, h_differ = 0;
+            size_t differ = 0, h_differ = 0, h_zero_sign = 0;
             const struct { const uint8_t* src; int type; const std::vector<float>* want; } mats[3] = {
                 {(const uint8_t*) dblob, f.gu_type, &G}, {(const uint8_t*) dblob + f.up_off, f.gu_type, &U},
                 {(const uint8_t*) dblob + f.down_off, f.d_type, &D}};
@@ -401,7 +401,19 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 dq_err = (std::max)(dq_err, rel(got_dq, *m.want));
                 for (size_t i = 0; i < got_dq.size(); ++i) {
                     differ += std::memcmp(&got_dq[i], &(*m.want)[i], 4) != 0;
-                    h_differ += got_h[i] != ggml_fp32_to_fp16(got_dq[i]);
+                    const auto want_h = ggml_fp32_to_fp16(got_dq[i]);
+                    if (got_h[i] != want_h) {
+                        // HIP may canonicalize a zero's sign during FP16 dequantization.
+                        // Both zeros represent the same weight; all nonzero bits must still match.
+                        if ((got_h[i] & 0x7fff) == 0 && (want_h & 0x7fff) == 0) {
+                            ++h_zero_sign;
+                            continue;
+                        }
+                        if (h_differ < 4)
+                            std::fprintf(stderr, "FP16 mismatch: type %d index %zu, fp32 %.9g, got 0x%04x, want 0x%04x\n",
+                                         m.type, i, got_dq[i], unsigned(got_h[i]), unsigned(want_h));
+                        ++h_differ;
+                    }
                 }
             }
             // the gate matrix as an embedding table of FF rows of H values
@@ -413,8 +425,8 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 emb_differ += std::memcmp(got_dq.data() + r * H, G.data() + (FF - 1 - r) * H, (size_t) H * 4) != 0;
             cudaFree(dq); cudaFree(dh); cudaFree(dtk);
             std::printf("          GPU dequant vs ggml to_float: rel %.2e, %zu of %lld values differ in any bit; fp16 of "
-                        "it: %zu differ; embedding rows: %zu of %lld differ\n", dq_err, differ, (long long) (3 * FF * H),
-                        h_differ, emb_differ, (long long) FF);
+                        "it: %zu differ (%zu zero-sign differences); embedding rows: %zu of %lld differ\n",
+                        dq_err, differ, (long long) (3 * FF * H), h_differ, h_zero_sign, emb_differ, (long long) FF);
             // exact where there is one product (Q8_0), a rounding at most elsewhere (fused multiply-adds)
             const bool exact = f.gu_type == 8 && f.d_type == 8;
             if (!(dq_err < 1e-6) || h_differ || (exact && (differ || emb_differ))) ++failures;

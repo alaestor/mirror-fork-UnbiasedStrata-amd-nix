@@ -1,2 +1,12 @@
 /build*/
 *.log
+/result
+/result-*
+.*
+__*
+!.gitignore
+!.gitattributes
+!.gitmodules
+!.env.template
+!__init__.py
+!__main__.py

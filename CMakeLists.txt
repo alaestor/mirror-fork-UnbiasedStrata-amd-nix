@@ -569,15 +569,17 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     target_compile_definitions(strata_prefill PRIVATE STRATA_HIPBLASLT_AVAILABLE=1)
     target_link_libraries(strata_prefill PRIVATE roc::hipblaslt)
 
-    add_executable(tune_hipblaslt tools/hip/tune_hipblaslt.cpp)
-    target_link_libraries(tune_hipblaslt PRIVATE hip::host roc::hipblas roc::hipblaslt)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/hip/tune_hipblaslt.cpp")
+      add_executable(tune_hipblaslt tools/hip/tune_hipblaslt.cpp)
+      target_link_libraries(tune_hipblaslt PRIVATE hip::host roc::hipblas roc::hipblaslt)
+    endif()
   endif()
 
   add_executable(strata src/program/generate.cpp)
   target_include_directories(strata PRIVATE ${_strata_gpu_include_directories})
   target_link_libraries(strata PRIVATE strata_engine strata_prefill strata_spec ${_strata_gpu_runtime_target})
 
-  if(STRATA_ENABLE_HIP)
+  if(STRATA_ENABLE_HIP AND STRATA_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/hip")
     enable_testing()
     set(_strata_hip_tests)
     add_executable(hip_prefill_gemm tests/hip/prefill_gemm.cpp)
@@ -1294,14 +1296,16 @@ if(STRATA_NATIVE_EXPERTS)
     target_compile_definitions(strata_prefill PUBLIC STRATA_PREFILL_MMQ=1)
 
     # Numerical diagnostic: synthetic layouts by default, optional first-expert IQ3_XXS/IQ4_NL check with a pack.
-    add_executable(hip_prefill_mmq_parity tests/hip/prefill_mmq_parity.cpp)
-    target_include_directories(hip_prefill_mmq_parity PRIVATE "${_strata_gg}/include")
-    target_link_libraries(hip_prefill_mmq_parity PRIVATE strata_prefill)
-    add_test(NAME hip_prefill_mmq_parity COMMAND hip_prefill_mmq_parity)
-    set_tests_properties(hip_prefill_mmq_parity PROPERTIES TIMEOUT 120)
-    list(APPEND _strata_hip_tests hip_prefill_mmq_parity)
+    if(STRATA_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/hip/prefill_mmq_parity.cpp")
+      add_executable(hip_prefill_mmq_parity tests/hip/prefill_mmq_parity.cpp)
+      target_include_directories(hip_prefill_mmq_parity PRIVATE "${_strata_gg}/include")
+      target_link_libraries(hip_prefill_mmq_parity PRIVATE strata_prefill)
+      add_test(NAME hip_prefill_mmq_parity COMMAND hip_prefill_mmq_parity)
+      set_tests_properties(hip_prefill_mmq_parity PROPERTIES TIMEOUT 120)
+      list(APPEND _strata_hip_tests hip_prefill_mmq_parity)
+    endif()
   endif()
-  if(STRATA_ENABLE_HIP)
+  if(STRATA_ENABLE_HIP AND STRATA_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/hip/ple_iq4.cpp")
     # Optional real-model diagnostic: pass the GGUF shard containing the native PLE key.
     add_executable(hip_ple_iq4 tests/hip/ple_iq4.cpp)
     target_link_libraries(hip_ple_iq4 PRIVATE strata_kernels strata_hip_runtime ggml-base)
@@ -1428,7 +1432,7 @@ endif()
 # ---- UnbiasedStrata: one binary = the engine above plus a C++ front end (frontend/) ------------------------------
 # The front end takes its tokenizer, its Jinja chat-template engine and its HTTP library from the same pinned
 # llama.cpp checkout that ggml comes from.  ggml is already configured above, so llama.cpp's own build reuses it.
-if(STRATA_ENABLE_CUDA AND STRATA_NATIVE_EXPERTS)
+if((STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND STRATA_NATIVE_EXPERTS)
   set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
   set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
   foreach(_o LLAMA_BUILD_TESTS LLAMA_BUILD_TOOLS LLAMA_BUILD_EXAMPLES LLAMA_BUILD_SERVER LLAMA_BUILD_APP
