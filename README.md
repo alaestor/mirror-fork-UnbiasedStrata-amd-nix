@@ -30,6 +30,14 @@ The AMD path is HIP/ROCm. NVIDIA builds, other GPUs, vision, and multi-GPU opera
 
 Both models have run on an RX 7900 XTX with 24 GiB VRAM and a 64 GB host. Text-only, warm, out-of-the-box: I clocked decode at ~180tps with qwen36 and ~22tps with qwen38 (with sufficient headroom for other applications: limited to 20G vram + 48G ram).
 
+### Python scope
+
+UnbiasedStrata's "No Python, no installer" promise still holds for building and running the standalone engine. The `strata`, `qwen36`, and `qwen38` packages do not require Python or invoke model preparation. The serving launchers expect existing GGUFs and prepared packs.
+
+This fork also exposes the inherited Python model-packing tools through the explicit `prepare-qwen36` and `prepare-qwen38` commands and the optional `-aio` flows. Those workflows require Python and its packing dependencies; Nix supplies them without a manual Python installation. Python is used for preparation, not inference.
+
+The default development shell and preparation/fetch checks also include Python. Those development dependencies do not become standalone runtime dependencies.
+
 ## Setup
 
 From this checkout:
