@@ -18,6 +18,8 @@ load_qwen38_env() {
   STRATA_PREPARED_DIR=${STRATA_QWEN38_PREPARED_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/unbiased-strata/qwen38}
   STRATA_CTX=${STRATA_QWEN38_CTX:-8192}
   STRATA_RAM_CAP_GIB=${STRATA_QWEN38_RAM_CAP_GIB:-40}
+  STRATA_MMPROJ=${STRATA_QWEN38_MMPROJ:-}
+  STRATA_VISION_TOKENS=${STRATA_QWEN38_VISION_TOKENS:-1024}
 }
 
 strata_configure_args() {
@@ -27,6 +29,9 @@ strata_configure_args() {
     --port "${STRATA_PORT:-8080}"
   )
   strata_engine_args=(--kv "${STRATA_KV:-q4_0}")
+  if [[ -n ${STRATA_MMPROJ:-} ]]; then
+    strata_server_args+=(--mmproj "$STRATA_MMPROJ" --vision-tokens "${STRATA_VISION_TOKENS:-1024}")
+  fi
   if [[ -n ${STRATA_THREADS:-} ]]; then
     strata_server_args+=(--threads "$STRATA_THREADS")
   fi

@@ -96,6 +96,40 @@
           };
           modelFile = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf";
           modelRevision = "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d";
+          qwen38Revision = "ed59f92082b1e93c0e96d60a8b11aab089b52f09";
+          qwen36Projector = pkgs.fetchurl {
+            name = "Qwen3.6-35B-A3B-vision-mmproj-BF16.gguf";
+            url = "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/${modelRevision}/mmproj-BF16.gguf";
+            sha256 = "da63cb47a76763c712393f8a017070188a304fa39f8aeea6edc629ed7b975cfa";
+          };
+          qwen38Projector = pkgs.fetchurl {
+            name = "Qwen3.8-Flash-Next-vision-mmproj-BF16.gguf";
+            url = "https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF/resolve/${qwen38Revision}/mmproj-Qwen3.8-Flash-Next-BF16.gguf";
+            sha256 = "b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0";
+          };
+          mkAioMm =
+            name: program: projector:
+            pkgs.writeShellApplication {
+              inherit name;
+              text = ''
+                exec ${program} --mmproj ${pkgs.lib.escapeShellArg "${projector}"} "$@"
+              '';
+            };
+          serveAioMm = mkAioMm "strata-qwen36-aio-mm" "${serveAio}/bin/strata-qwen36-aio" qwen36Projector;
+          serveQwen38AioMm =
+            mkAioMm "strata-qwen38-aio-mm" "${serveQwen38Aio}/bin/strata-qwen38-aio"
+              qwen38Projector;
+          mkMmLauncher =
+            modelName:
+            pkgs.writeShellApplication {
+              name = "strata-${modelName}-aio-mm";
+              runtimeInputs = [ pkgs.nix ];
+              text = ''
+                exec nix run ${inputs.self}#legacyPackages.${system}.${modelName}-aio-mm -- "$@"
+              '';
+            };
+          aioMmLauncher = mkMmLauncher "qwen36";
+          qwen38AioMmLauncher = mkMmLauncher "qwen38";
           # Only explicit AIO outputs evaluate model downloads. LFS payloads
           # stream in builders, not the Nix evaluator (nix-hug v5 workaround).
           nixHug = import ./nix/nix-hug-streaming.nix { inherit pkgs nix-hug; };
@@ -109,7 +143,7 @@
           qwen38Shard2 = "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf";
           qwen38Model = nixHug.fetchModel {
             url = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF";
-            rev = "ed59f92082b1e93c0e96d60a8b11aab089b52f09";
+            rev = qwen38Revision;
             filters.files = [
               "IQ3_XXS/${qwen38Shard1}"
               "IQ3_XXS/${qwen38Shard2}"
@@ -355,9 +389,19 @@
             prepare-qwen36 = prepareLocal;
             qwen36 = serveLocal;
             qwen36-aio = aioLauncher;
+            qwen36-aio-mm = aioMmLauncher;
             prepare-qwen38 = prepareQwen38;
             qwen38 = serveQwen38;
             qwen38-aio = qwen38AioLauncher;
+            qwen38-aio-mm = qwen38AioMmLauncher;
+          };
+          apps.qwen36-aio-mm = {
+            type = "app";
+            program = "${aioMmLauncher}/bin/strata-qwen36-aio-mm";
+          };
+          apps.qwen38-aio-mm = {
+            type = "app";
+            program = "${qwen38AioMmLauncher}/bin/strata-qwen38-aio-mm";
           };
           apps.prepare-qwen38 = {
             type = "app";
@@ -391,10 +435,14 @@
             inherit model;
             model-pack = modelPack;
             qwen36-aio = serveAio;
+            qwen36-mmproj = qwen36Projector;
+            qwen36-aio-mm = serveAioMm;
             qwen38-model = qwen38Model;
             qwen38-mtp-source = qwen38MtpSource;
             qwen38-model-pack = qwen38ModelPack;
             qwen38-aio = serveQwen38Aio;
+            qwen38-mmproj = qwen38Projector;
+            qwen38-aio-mm = serveQwen38AioMm;
           };
           apps.check-gpu = {
             type = "app";
@@ -436,6 +484,33 @@
                 bash ${./nix/launcher-common-test.sh} ${launcherCommon}
                 touch "$out"
               '';
+          checks.aio-mm =
+            let
+              mockServer =
+                loader:
+                pkgs.writeShellApplication {
+                  name = "mock-aio-${loader}";
+                  extraShellCheckFlags = [ "-x" ];
+                  text = ''
+                    source ${launcherCommon}
+                    ${loader}
+                    strata_configure_args "$@"
+                    printf '%s\n' "''${strata_server_args[@]}" ENGINE "''${strata_engine_args[@]}"
+                  '';
+                };
+              mock36 = mockServer "load_strata_env";
+              mock38 = mockServer "load_qwen38_env";
+              wrapper36 =
+                mkAioMm "test-qwen36-aio-mm" "${mock36}/bin/mock-aio-load_strata_env"
+                  "/models/qwen36 BF16.gguf";
+              wrapper38 =
+                mkAioMm "test-qwen38-aio-mm" "${mock38}/bin/mock-aio-load_qwen38_env"
+                  "/models/qwen38 BF16.gguf";
+            in
+            pkgs.runCommand "strata-aio-mm-tests" { nativeBuildInputs = [ pkgs.bash ]; } ''
+              bash ${./nix/aio-mm-test.sh} ${wrapper36}/bin/test-qwen36-aio-mm ${wrapper38}/bin/test-qwen38-aio-mm
+              touch "$out"
+            '';
           checks.frontend = pkgs.stdenv.mkDerivation {
             name = "strata-frontend-tests";
             src = pkgs.lib.fileset.toSource {

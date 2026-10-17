@@ -124,7 +124,21 @@ Or, for Flash-Next:
 nix run .#qwen38-aio
 ```
 
-Only `-aio` launchers automatically fetch model artifacts. They use nix-hug for
+For image input with the matching projector included:
+
+```sh
+nix run .#qwen36-aio-mm
+nix run .#qwen38-aio-mm
+```
+
+The `-aio-mm` variants fetch a pinned, SHA-256-verified BF16 projector into the
+Nix store, about 903 MB for Qwen3.6 or 908 MB for Qwen3.8. They reuse the ordinary
+AIO weights and packs. The bundled projector overrides the optional local
+projector environment setting; an explicit `--mmproj PATH` overrides the bundled
+default. The configured image token limit still applies. No local projector
+download or `.env` entry is required.
+
+Only `-aio` and `-aio-mm` launchers automatically fetch model artifacts. They use nix-hug for
 pinned GGUF downloads into the Nix store, prepare packs there, and start the
 server. Qwen3.8 additionally fetches about 5.2 GB of pinned MTP tensor ranges
 through a hash-checked fixed-output derivation. It inherits the local Qwen3.8
@@ -139,7 +153,7 @@ intermediates, and temporary copies. Flash-Next's two GGUFs alone total 75.8 GB.
 
 The AIO launchers defer model evaluation until they run. Building the default
 package or running `nix flake check` does not fetch model artifacts. The actual
-model-bearing derivations live under `legacyPackages`; building a `qwen*-aio`
+model-bearing derivations live under `legacyPackages`; building a `qwen*-aio` or `qwen*-aio-mm`
 package itself only builds a small launcher.
 
 ## Reproducibility and scope
@@ -154,7 +168,23 @@ Compilation is capped at four jobs and respects lower `--cores` settings.
 Finish builds and pack preparation before loading the model.
 The package targets Linux x86-64, AVX2 CPUs, and `gfx1100` only. Other Radeon
 architectures require a build with a matching `CMAKE_HIP_ARCHITECTURES`.
-Images are not configured.
+Image input is opt-in through `--mmproj`; see the Qwen3.8 instructions below.
+
+### Qwen3.6 image configuration
+
+Use Qwen3.6's own [BF16 projector](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/blob/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/mmproj-BF16.gguf),
+about 903 MB. Set these values in `.env` and run `nix run .#qwen36`:
+
+```sh
+STRATA_MMPROJ="$HOME/Downloads/Qwen3.6-35B-A3B-vision-mmproj-BF16.gguf"
+STRATA_VISION_TOKENS=1024
+```
+
+The projector is BF16, independent of the language model's quantization.
+Qwen3.6's projector produces 2048-wide embeddings; Qwen3.8's produces 2560-wide
+embeddings, so they are not interchangeable. The image request format and CPU
+encoding limits described below apply to both models. Qwen3.8 uses its separate
+`STRATA_QWEN38_MMPROJ` setting and does not inherit Qwen3.6's projector.
 
 ## Flash-Next experiment
 
@@ -170,6 +200,55 @@ they occupy about 75.8 GB. Stop any running model before loading this one.
 nix run .#prepare-qwen38
 nix run .#qwen38
 ```
+
+### Qwen3.8 image input
+
+The existing engine supports this model's image embeddings and rotary positions.
+Download the matching [BF16 vision projector](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF/blob/ed59f92082b1e93c0e96d60a8b11aab089b52f09/mmproj-Qwen3.8-Flash-Next-BF16.gguf)
+separately, about 908 MB, and set these values in `.env`:
+
+```sh
+STRATA_QWEN38_MMPROJ="/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf"
+STRATA_QWEN38_VISION_TOKENS=1024
+```
+
+Then run `nix run .#qwen38` as usual. Alternatively, pass
+`--mmproj /path/to/projector.gguf --vision-tokens 1024` to `qwen38` or
+`qwen38-aio`. CLI options override the configuration. These launchers do not download
+the projector automatically; `qwen38-aio-mm` includes it instead. Leaving
+`STRATA_QWEN38_MMPROJ` empty keeps the ordinary launchers in text-only
+serving. The encoder runs on the CPU, so allow extra host memory within the
+service's memory limit and expect image preprocessing latency. The image token
+limit is per image, accepts 16..4096, and consumes the model's context budget.
+
+Send images to `/v1/chat/completions` as OpenAI-style content parts:
+
+```json
+{
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "Describe this image."},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,BASE64_BYTES"}}
+    ]
+  }],
+  "max_tokens": 256
+}
+```
+
+Replace `BASE64_BYTES` with the encoded image. Only base64 data URLs are accepted,
+not remote URLs or local file paths. Supported formats are PNG, JPEG, BMP and GIF,
+with at most 32 images per request. `/v1/models` lists `image` in
+`input_modalities` when the projector is loaded.
+
+Audio input and audio generation are not supported. The official
+[model configuration](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/de4b8e4d43b917e7706784d8bb445c9af86a3540/config.json)
+defines a vision encoder and text decoder, with no audio encoder or decoder.
+The server accepts text and images only. Speech would require a separate
+speech-to-text or text-to-speech model; an audio projector cannot add that
+capability to this checkpoint. Video requests are also unsupported by this server.
+
+### Local preparation and memory limits
 
 Local preparation also requires `STRATA_QWEN38_MTP_SOURCE`: an explicitly
 provided local directory with `mtp-manifest.json` and all 31 raw BF16 tensors

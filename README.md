@@ -26,7 +26,7 @@ This flake targets Linux x86-64, AVX2 CPUs, and AMD `gfx1100`. Other GPU archite
 
 The host needs the `amdgpu` driver, as well as permission to access `/dev/kfd` and the GPU render node. Nix supplies ROCm userspace libraries. Flash-Next additionally requires a working systemd user manager to limit ram consumption. NVMe storage helps with loading and model pages that do not remain in RAM.
 
-The AMD path is HIP/ROCm. NVIDIA builds, other GPUs, vision, and multi-GPU operation are outside this fork's tested Nix configuration. Refer to [UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata#readme) for its native build instructions and broader feature documentation.
+The AMD path is HIP/ROCm. Both models support image input with their matching CPU vision projectors; see [image setup](docs/nix-amd.md#qwen36-image-configuration) and [request format](docs/nix-amd.md#qwen38-image-input). Audio is unsupported. NVIDIA builds, other GPUs, and multi-GPU operation are outside this fork's tested Nix configuration. Refer to [UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata#readme) for its native build instructions and broader feature documentation.
 
 Both models have run on an RX 7900 XTX with 24 GiB VRAM and a 64 GB host. Text-only, warm, out-of-the-box: I clocked decode at ~180tps with qwen36 and ~22tps with qwen38 (with sufficient headroom for other applications: limited to 20G vram + 48G ram).
 
@@ -134,13 +134,21 @@ Each server serves one loaded model; the request's `model` field does not switch
 nix run .#qwen36-aio
 # Or:
 nix run .#qwen38-aio
+# Include the matching BF16 vision projector:
+nix run .#qwen36-aio-mm
+nix run .#qwen38-aio-mm
 ```
 
-Only `-aio` launchers automatically download model artifacts. They use nix-hug
-for pinned GGUFs and prepare packs in the Nix store. Qwen3.8 also fetches the
+Only `-aio` and `-aio-mm` launchers automatically download model artifacts.
+They use nix-hug for pinned GGUFs and prepare packs in the Nix store. Qwen3.8 also fetches the
 pinned MTP tensors through a fixed-output derivation and keeps the same RAM,
 swap, and GPU-reserve policy as the local launcher. Both ignore configured local
 model and pack paths; other runtime settings still apply.
+
+The `-aio-mm` variants enable image input with the matching BF16 projector,
+about 0.9 GB extra, reusing the ordinary AIO weights and packs. No projector
+configuration is needed; `--mmproj PATH` overrides the bundled default.
+See [image request format](docs/nix-amd.md#qwen38-image-input).
 
 A nix-hug adapter streams large payloads through Nix build jobs instead of
 buffering them in the evaluator. Allow ample disk space for weights, packs,
