@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-prepare36=$1
-prepare38=$2
+prepare38=$1
 work=$(mktemp -d)
 cd "$work"
 # An explicit empty configuration prevents inheriting a developer's .env.
@@ -16,8 +15,6 @@ expect_failure() {
     exit 1
   fi
 }
-expect_failure "$prepare36"
-grep -q 'Set STRATA_MODEL' stderr
 expect_failure "$prepare38"
 grep -q 'STRATA_QWEN38_MTP_SOURCE' stderr
 # Explicit model arguments must not enable implicit MTP acquisition.

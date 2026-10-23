@@ -1,24 +1,12 @@
+---
+include_toc: true
+---
+
 # UnbiasedStrata on Nix + AMD
 
 A personal fork of [robertkarl/UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata), which combines [Strata](https://github.com/Niko1221/Strata)'s inference engine with a C++ OpenAI-style API server and llama.cpp's tokenizer and chat templates. Strata places model experts across GPU memory, host RAM, and file-backed storage.
 
-This fork packages that engine for AMD through HIP in a Nix flake, with support for gfx1100 (AMD 7900 XTX) and option model downloads via the "all-in-one" packages. The Qwen3.6 port, Flash-Next support, MTP drafting, and memory-tiering logic are inherited from UnbiasedStrata.
-
-## What this fork adds
-
-- A Nix flake with pinned llama.cpp sources and model checksums. Builds use at most four jobs and do not invoke the upstream Strata's imparative installer.
-
-- A working HIP build of the combined API server, targeting `gfx1100`. CMake skips optional HIP tools and tests whose sources are absent in this fork.
-
-- Local-weight preparation and launchers for Qwen3.6-35B-A3B Q4_K_XL MTP and Qwen3.8-Flash-Next IQ3_XXS; these use manually downloaded GGUFs outside the Nix store.
-
-- Explicit `qwen36-aio` and `qwen38-aio` launchers using nix-hug, storing weights and prepared packs in the Nix store. Ordinary builds and checks do not fetch model weights.
-
-- Trusted `.env` configuration, with separate paths and sizing for each model.
-
-- A systemd Flash-Next launcher with a memory limit, service swap disabled, and configurable GPU headroom for use along side desktop applications.
-
-- Launcher and pinned-fetch tests, plus GPU expert diagnostics that distinguish FP16 signed-zero differences from actual weight mismatches.
+This fork packages that engine for AMD through HIP in a Nix flake, with support for gfx1100 (AMD 7900 XTX) and option model downloads via the "all-in-one" packages. The model implementations and memory-tiering logic are inherited from UnbiasedStrata.
 
 ## Requirements and tested scope
 
@@ -28,15 +16,10 @@ The host needs the `amdgpu` driver, as well as permission to access `/dev/kfd` a
 
 The AMD path is HIP/ROCm. Both models support image input with their matching CPU vision projectors; see [image setup](docs/nix-amd.md#qwen36-image-configuration) and [request format](docs/nix-amd.md#qwen38-image-input). Audio is unsupported. NVIDIA builds, other GPUs, and multi-GPU operation are outside this fork's tested Nix configuration. Refer to [UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata#readme) for its native build instructions and broader feature documentation.
 
-Both models have run on an RX 7900 XTX with 24 GiB VRAM and a 64 GB host. Text-only, warm, out-of-the-box: I clocked decode at ~180tps with qwen36 and ~22tps with qwen38 (with sufficient headroom for other applications: limited to 20G vram + 48G ram).
-
-### Python scope
-
-UnbiasedStrata's "No Python, no installer" promise still holds for building and running the standalone engine. The `strata`, `qwen36`, and `qwen38` packages do not require Python or invoke model preparation. The serving launchers expect existing GGUFs and prepared packs.
-
-This fork also exposes the inherited Python model-packing tools through the explicit `prepare-qwen36` and `prepare-qwen38` commands and the optional `-aio` flows. Those workflows require Python and its packing dependencies; Nix supplies them without a manual Python installation. Python is used for preparation, not inference.
-
-The default development shell and preparation/fetch checks also include Python. Those development dependencies do not become standalone runtime dependencies.
+Both models have run on an RX 7900 XTX with 24 GiB VRAM and a 64 GB host.
+After the upstream 2 update, local tests reported approximately **128 tps
+for Qwen3.6** and **47 tps for Flash-Next**. These are informal observations,
+not controlled benchmarks: results will vary with host and platform.
 
 ## Setup
 
@@ -60,12 +43,10 @@ Download the pinned **Q4_K_XL file from the MTP repository** linked in the
 GGUF supplies both the model and draft head. Set `STRATA_MODEL` in `.env`, then:
 
 ```sh
-nix run .#prepare-qwen36
 nix run .#qwen36
 ```
 
-Preparation verifies the checksum and writes packs to `STRATA_PREPARED_DIR`.
-Keep the GGUF and packs. Preparation is needed once, not on every start.
+No preparation is needed: the engine reads the GGUF directly.
 The default context is 32768 tokens. This launcher runs in the foreground;
 stop it with Ctrl-C before switching models.
 
@@ -140,7 +121,7 @@ nix run .#qwen38-aio-mm
 ```
 
 Only `-aio` and `-aio-mm` launchers automatically download model artifacts.
-They use nix-hug for pinned GGUFs and prepare packs in the Nix store. Qwen3.8 also fetches the
+They use nix-hug for pinned GGUFs. Qwen3.8 prepares packs in the Nix store and fetches the
 pinned MTP tensors through a fixed-output derivation and keeps the same RAM,
 swap, and GPU-reserve policy as the local launcher. Both ignore configured local
 model and pack paths; other runtime settings still apply.
@@ -155,6 +136,7 @@ buffering them in the evaluator. Allow ample disk space for weights, packs,
 and temporary copies. Ordinary builds and checks do not fetch model artifacts;
 Nix still downloads build dependencies as needed.
 
+
 ## Validation
 
 ```sh
@@ -164,13 +146,14 @@ nix run .#check-gpu
 
 Flake checks cover the package build, frontend, launcher configuration, and
 pinned MTP fetch behavior. GPU diagnostics require a real GPU and run outside
-the Nix sandbox. Both models passed regular and streaming chat smoke tests.
-Interactive use on the test host reported about 190 tokens/s for Qwen3.6 and
-22 tokens/s for Flash-Next, with MTP enabled. These are observations, not
-controlled benchmarks. Prompt length, routing, cache warmth, and desktop GPU
-use affect performance.
+the Nix sandbox. Before the upstream 2 migration, both models passed regular and streaming chat smoke tests.
+Both models have also been tested locally since the update, with the throughput
+reported above. Prompt length, routing, cache warmth, and desktop GPU use affect
+performance. Vision has not been revalidated since the update.
 
-## Upstream references and license
+# Upstream
+
+## References and license
 
 See [robertkarl/UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata)
 for engine architecture, supported model constraints, native build instructions,
@@ -181,3 +164,38 @@ in `docs/`; their NVIDIA measurements and requirements are not AMD guarantees.
 The engine is the work of Niko1221 and the Strata contributors; UnbiasedStrata
 provides the C++ server and model integration inherited here. Code is MIT; see
 [LICENSE](LICENSE). Model weights have their own licenses.
+
+## What this fork adds
+
+- A Nix flake with pinned llama.cpp sources and model downloads. Builds use at most four jobs and do not invoke the upstream Strata's imparative installer.
+
+- A HIP build of the API server and separate engines, targeting `gfx1100`. CMake skips optional HIP tools and tests whose sources are absent in this fork.
+
+- Local-weight launchers for Qwen3.6-35B-A3B Q4_K_XL and Qwen3.8-Flash-Next IQ3_XXS; these use manually downloaded GGUFs outside the Nix store. Flash-Next preparation verifies its inputs.
+
+- Explicit `qwen36-aio` and `qwen38-aio` launchers using nix-hug, storing weights and Flash-Next's prepared packs in the Nix store. Ordinary builds and checks do not fetch model weights.
+
+- Trusted `.env` configuration, with separate paths and sizing for each model.
+
+- A systemd Flash-Next launcher with a memory limit, service swap disabled, and configurable GPU headroom for use along side desktop applications.
+
+- Launcher and pinned-fetch tests, plus GPU expert diagnostics that distinguish FP16 signed-zero differences from actual weight mismatches.
+
+## Usage of python
+
+UnbiasedStrata's "No Python, no installer" promise still holds for building and running the standalone engine. The `strata`, `qwen36`, and `qwen38` packages do not require Python or invoke model preparation. The serving launchers expect existing GGUFs; Flash-Next also needs prepared packs.
+
+This fork also exposes the inherited Python model-packing tools through the explicit `prepare-qwen38` command and the optional `-aio` flows. Flash-Next preparation requires Python and its packing dependencies; Nix supplies them without a manual Python installation. Python is used for preparation, not inference.
+
+The default development shell and preparation/fetch checks also include Python. Those development dependencies do not become standalone runtime dependencies.
+
+
+## Edits to upstream files
+
+- [CMakeLists.txt](CMakeLists.txt): guard absent optional HIP sources and link strata-poly's HIP MMQ target to hipBLAS.
+- [GPU parity diagnostic](src/kernels/native_expert_parity.cpp): report FP16 signed-zero differences separately from weight mismatches.
+- [.gitignore](.gitignore): ignore local `.env` and Nix result links.
+- [README.md](README.md): document this fork's AMD/Nix workflows and tested scope.
+
+
+

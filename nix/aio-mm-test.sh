@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# The wrappers use the real configuration parser but no model or GPU.
+work=$(mktemp -d)
+trap 'rm -r "$work"' EXIT
+export STRATA_ENV_FILE="$work/config.env"
+touch "$STRATA_ENV_FILE"
+unset STRATA_VRAM_CAP_MIB STRATA_RAM_CAP_GIB STRATA_THREADS STRATA_CTX STRATA_KV
 for model in qwen36 qwen38; do
   wrapper=$1
   shift
   export STRATA_MMPROJ='/ignored/local projector.gguf'
   export STRATA_QWEN38_MMPROJ='/ignored/flash projector.gguf'
   mapfile -t args < <("$wrapper")
-  [[ ${args[-5]} == --mmproj && ${args[-4]} == "/models/$model BF16.gguf" ]]
-  [[ ${args[-3]} == ENGINE && ${args[-2]} == --kv && ${args[-1]} == q4_0 ]]
-
-  mapfile -t args < <("$wrapper" --mmproj '/override/custom BF16.gguf' --vision-tokens 256 -- --kv int8)
-  [[ ${args[-9]} == --mmproj && ${args[-8]} == '/override/custom BF16.gguf' ]]
-  [[ ${args[-7]} == --vision-tokens && ${args[-6]} == 256 ]]
-  [[ ${args[-5]} == ENGINE && ${args[-2]} == --kv && ${args[-1]} == int8 ]]
+  joined=" ${args[*]} "
+  [[ $joined == *" --mmproj /models/$model BF16.gguf "* ]]
+  if [[ $model == qwen38 ]]; then
+    [[ $joined == *' --kv q4_0 --resident-budget-gib 40 --vision '* ]]
+  else
+    [[ $joined == *' --kv q8_0 '* ]]
+  fi
+  mapfile -t args < <("$wrapper" --mmproj '/override/custom BF16.gguf' --image-max-tokens 256 -- --lookup 0)
+  joined=" ${args[*]} "
+  [[ $joined == *' --mmproj /override/custom BF16.gguf --image-max-tokens 256 '* ]]
+  [[ $joined == *' --lookup 0 ' ]]
 done
-echo 'PASS: bundled projectors, environment precedence, CLI overrides, engine arguments'
+echo 'PASS: bundled projectors, CLI precedence, engine arguments'

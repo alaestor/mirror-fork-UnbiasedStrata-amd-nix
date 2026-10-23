@@ -8,37 +8,34 @@ GPU kernels.
 ## Local weights
 
 Download the pinned [Q4_K_XL file from the MTP repository](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf),
-22.85 GB. That one file supplies both the main model and the draft head.
+22.85 GB. The current Qwen3.6 launcher reads this GGUF directly through strata-poly.
 
-Copy `.env.template` to `.env` and set `STRATA_MODEL` and
-`STRATA_PREPARED_DIR`. Build the server, prepare the packs once, then serve:
+Copy `.env.template` to `.env` and set `STRATA_MODEL`. Build the server, then serve:
 
 ```sh
 nix build .#strata --cores 4
-nix run .#prepare-qwen36
 nix run .#qwen36
 ```
 
-Preparation verifies the GGUF's SHA-256 and runs this repository's pack tools.
-It writes `pack/` and `mtp/` into the output directory without copying the weights
-into the Nix store. Keep both the GGUF and the prepared directory for later runs.
-Local preparation and serving never download model artifacts. All model inputs
-must be provided explicitly; Nix still fetches pinned build dependencies.
+Qwen3.6 needs no preparation. Flash-Next
+still requires preparation as described below. Neither local workflow downloads
+model artifacts; Nix still fetches pinned build dependencies.
 
 Launchers read `.env` in the current directory. Use `STRATA_ENV_FILE=/path/to/file`
 to select another file. It is trusted shell configuration, not an untrusted data
 file. `.env` is Git-ignored; `.env.template` is explicitly included.
 The template lists context, threading, address, KV type, and memory-cap settings.
-`STRATA_RAM_CAP_GIB=8` bounds the expert RAM tier, not total process memory or
-the filesystem page cache.
+The new engines do not accept the former VRAM/RAM cap settings. Remove
+`STRATA_VRAM_CAP_MIB` and Qwen3.6's `STRATA_RAM_CAP_GIB`; use
+`-- --vram-reserve-mib MIB` for GPU headroom. Flash-Next's systemd memory limit
+still applies; `STRATA_QWEN38_RAM_CAP_GIB` selects its ranked resident expert budget.
 CLI flags override those settings, with engine options after `--`:
 
 ```sh
-nix run .#qwen36 -- --ctx 65536 -- --kv int8
+nix run .#qwen36 -- --ctx 65536 -- --kv q8_0
 ```
 
-Both local commands also accept `MODEL.gguf PREPARED_DIR` as their first two
-arguments to override the configured paths.
+The Qwen3.6 launcher accepts a model path before any flags.
 
 The example context is deliberately smaller than the model's maximum. Increase
 it after checking the startup VRAM plan. The desktop also needs VRAM.
@@ -63,20 +60,17 @@ The table lists launcher defaults when a value is unset or empty. Copying
 | Variable | Default | Applies to | Meaning |
 | --- | --- | --- | --- |
 | `STRATA_ENV_FILE` | `.env` in the current directory | All launchers | Select a trusted Bash configuration file. An explicitly selected missing file is an error; a missing default `.env` is allowed. |
-| `STRATA_MODEL` | Unset | Qwen3.6 local preparation and serving | Path to the pinned Q4_K_XL MTP GGUF. |
-| `STRATA_PREPARED_DIR` | Data directory + `/unbiased-strata/qwen36` | Qwen3.6 local preparation and serving | Directory containing the generated `pack/` and `mtp/`. |
+| `STRATA_MODEL` | Unset | Qwen3.6 local serving | Path to the pinned Q4_K_XL MTP GGUF. |
 | `STRATA_CTX` | `32768` tokens | Qwen3.6 local and AIO serving | Requested context capacity, including prompt and response. |
 | `STRATA_HOST` | `127.0.0.1` | Both models, including AIO | Bind address. Keep loopback unless you intend to expose the API to other machines. |
 | `STRATA_PORT` | `8080` | Both models, including AIO | HTTP port. |
-| `STRATA_KV` | `q4_0` | Both models, including AIO | KV cache format: `q4_0`, `int8`, or `fp16`. Larger formats need more memory. |
+| `STRATA_KV` | Model-specific | Both models, including AIO | Qwen3.6 accepts `q8_0` or `fp16`; Flash-Next defaults to `q4_0`. Empty selects the model default. |
 | `STRATA_THREADS` | Engine automatic sizing | Both models, including AIO | CPU thread count, passed as `--threads`. |
-| `STRATA_VRAM_CAP_MIB` | Engine automatic sizing | Both models, including AIO | Emulate a smaller GPU, in MiB. This allocates a blocker; it does not free VRAM for desktop apps. Leave empty for normal use. |
-| `STRATA_RAM_CAP_GIB` | Engine automatic sizing | Qwen3.6 local and AIO serving | Expert RAM-tier budget, in GiB. Not a total process or filesystem-cache limit. |
 | `STRATA_QWEN38_MODEL` | Unset | Qwen3.8 local preparation and serving | First IQ3_XXS shard. The second must retain its matching filename beside it. |
 | `STRATA_QWEN38_PREPARED_DIR` | Data directory + `/unbiased-strata/qwen38` | Qwen3.8 local preparation and serving | Directory containing generated `pack/`, `mtp/`, and `mtp-q2_0.gguf`. |
 | `STRATA_QWEN38_MTP_SOURCE` | Unset; required | Qwen3.8 local preparation only | Explicit local directory containing `mtp-manifest.json` and the 31 raw BF16 `tensors/*.bin` files. Validated offline; never downloaded or modified. |
 | `STRATA_QWEN38_CTX` | `8192` tokens | Qwen3.8 serving | Requested context capacity. Replaces `STRATA_CTX` for this launcher. |
-| `STRATA_QWEN38_RAM_CAP_GIB` | `40` GiB | Qwen3.8 serving | Expert RAM-tier budget. Replaces `STRATA_RAM_CAP_GIB`, not the cgroup limit below. |
+| `STRATA_QWEN38_RAM_CAP_GIB` | `40` GiB | Qwen3.8 serving | Ranked resident expert budget, passed as `--resident-budget-gib`. Separate from total service memory. |
 | `STRATA_QWEN38_MEMORY_MAX` | `48G` | Qwen3.8 serving | systemd `MemoryMax`, in systemd size syntax. `48G` means 48 GiB. Limits service-charged RAM and cache; exhausting unreclaimable memory can kill the service. |
 | `STRATA_QWEN38_VRAM_RESERVE_MIB` | `4096` MiB | Qwen3.8 serving | GPU sizing headroom for later allocations and desktop apps. Increase it to reduce the expert cache. This is not a hard VRAM quota. |
 
@@ -89,15 +83,14 @@ STRATA_ENV_FILE=/path/to/strata.env nix run .#qwen38
 nix run .#qwen38 -- --ctx 16384 --port 8081 -- --vram-reserve-mib 5120
 ```
 
-Local preparation and serving accept two positional path overrides before any
-flags. Preparation accepts no other arguments:
+Qwen3.6 serving accepts a model path before any flags.
 
 ```sh
-nix run .#prepare-qwen36 -- /models/model.gguf /models/qwen36-prepared
-nix run .#qwen36 -- /models/model.gguf /models/qwen36-prepared --port 8081
+nix run .#qwen36 -- /models/model.gguf --port 8081
 ```
 
-Qwen3.8 uses the same syntax with shard 1 and its own prepared directory.
+Qwen3.8 serving accepts shard 1 and its prepared directory before any flags.
+Its preparation command accepts these two paths without additional flags.
 Both `-aio` launchers ignore configured model, draft-source, and pack paths,
 using their bundled pinned artifacts instead. Their context, API, threading, KV,
 and memory-tier settings still apply. Qwen3.6 launchers run in the foreground without the Qwen3.8
@@ -115,7 +108,7 @@ GPU architecture and build concurrency are not runtime `.env` options.
 ## All-in-one launchers
 
 ```sh
-nix run .#qwen36-aio -- --ctx 32768 -- --kv q4_0
+nix run .#qwen36-aio -- --ctx 32768 -- --kv q8_0
 ```
 
 Or, for Flash-Next:
@@ -213,7 +206,7 @@ STRATA_QWEN38_VISION_TOKENS=1024
 ```
 
 Then run `nix run .#qwen38` as usual. Alternatively, pass
-`--mmproj /path/to/projector.gguf --vision-tokens 1024` to `qwen38` or
+`--mmproj /path/to/projector.gguf --image-max-tokens 1024` to `qwen38` or
 `qwen38-aio`. CLI options override the configuration. These launchers do not download
 the projector automatically; `qwen38-aio-mm` includes it instead. Leaving
 `STRATA_QWEN38_MMPROJ` empty keeps the ordinary launchers in text-only
@@ -276,9 +269,10 @@ GGUF shards and generated packs; it does not need the raw tensors.
 The launcher requires a working systemd user manager. It runs a transient service
 named `strata-qwen38`, with `MemoryMax=48G` and `MemorySwapMax=0`. This limits
 cgroup-charged memory, including file cache, without changing host swap settings.
-`STRATA_QWEN38_MEMORY_MAX` changes the total limit. The independent
-`STRATA_QWEN38_RAM_CAP_GIB=40` setting bounds the engine's expert tier, leaving
-room for other allocations. The initial context is 8192 tokens.
+`STRATA_QWEN38_MEMORY_MAX` changes the total limit.
+`STRATA_QWEN38_RAM_CAP_GIB=40` maps to `--resident-budget-gib 40`: keep the
+hottest off-GPU experts in 40 GiB of RAM and read the remainder from files.
+The initial context is 8192 tokens.
 `STRATA_QWEN38_VRAM_RESERVE_MIB=4096` leaves room in the GPU sizing plan for
 later engine allocations and the desktop. Actual free VRAM will be lower than
 this reserve. This uses `--vram-reserve-mib`, not `--vram-cap`, whose blocker
@@ -315,8 +309,8 @@ nix build .#checks.x86_64-linux.local-preparation
 nix run .#check-gpu
 ```
 
-The GPU diagnostic checks device detection and the three expert-type pairs used
-by Q4_K_XL. It reports FP16 signed-zero differences separately. Nonzero FP16
+The GPU diagnostic checks device detection and Q4_K, Q5_K, and Q6_K gate/up
+weights with Q5_1 down weights at upstream's fixed 2560-by-640 geometry. It reports FP16 signed-zero differences separately. Nonzero FP16
 values must still match exactly. These synthetic checks do not replace testing
 actual model responses.
 

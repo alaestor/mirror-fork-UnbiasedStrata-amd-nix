@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by the packaged launchers. .env is trusted shell configuration.
 load_strata_env() {
   local env_file=${STRATA_ENV_FILE:-.env}
@@ -8,12 +9,13 @@ load_strata_env() {
     echo "Configuration file does not exist: $env_file" >&2
     return 1
   fi
+  STRATA_ENGINE_KIND=poly
   STRATA_MODEL=${STRATA_MODEL:-}
-  STRATA_PREPARED_DIR=${STRATA_PREPARED_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/unbiased-strata/qwen36}
 }
 
 load_qwen38_env() {
   load_strata_env
+  STRATA_ENGINE_KIND=flash
   STRATA_MODEL=${STRATA_QWEN38_MODEL:-}
   STRATA_PREPARED_DIR=${STRATA_QWEN38_PREPARED_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/unbiased-strata/qwen38}
   STRATA_CTX=${STRATA_QWEN38_CTX:-8192}
@@ -23,30 +25,64 @@ load_qwen38_env() {
 }
 
 strata_configure_args() {
-  strata_server_args=(
-    --ctx "${STRATA_CTX:-32768}"
-    --host "${STRATA_HOST:-127.0.0.1}"
-    --port "${STRATA_PORT:-8080}"
-  )
-  strata_engine_args=(--kv "${STRATA_KV:-q4_0}")
+  strata_server_args=(--host "${STRATA_HOST:-127.0.0.1}" --port "${STRATA_PORT:-8080}")
+  local kv=${STRATA_KV:-} kind=${STRATA_ENGINE_KIND:-poly}
+  if [[ $kind == flash ]]; then
+    kv=${kv:-q4_0}
+  else
+    kv=${kv:-q8_0}
+  fi
+  strata_engine_args=(--max-context "${STRATA_CTX:-32768}" --kv "$kv")
+  if [[ $kind == flash && -n ${STRATA_RAM_CAP_GIB:-} ]]; then
+    strata_engine_args+=(--resident-budget-gib "$STRATA_RAM_CAP_GIB")
+  fi
   if [[ -n ${STRATA_MMPROJ:-} ]]; then
-    strata_server_args+=(--mmproj "$STRATA_MMPROJ" --vision-tokens "${STRATA_VISION_TOKENS:-1024}")
+    strata_server_args+=(--mmproj "$STRATA_MMPROJ" --image-max-tokens "${STRATA_VISION_TOKENS:-1024}")
+    if [[ $kind == flash ]]; then strata_engine_args+=(--vision); fi
   fi
   if [[ -n ${STRATA_THREADS:-} ]]; then
     strata_server_args+=(--threads "$STRATA_THREADS")
+    if [[ $kind == flash ]]; then
+      strata_engine_args+=(--pool-workers "$STRATA_THREADS")
+    else
+      strata_engine_args+=(--threads "$STRATA_THREADS")
+    fi
   fi
   if [[ -n ${STRATA_VRAM_CAP_MIB:-} ]]; then
-    strata_server_args+=(--vram-cap "$STRATA_VRAM_CAP_MIB")
+    echo 'STRATA_VRAM_CAP_MIB is no longer supported; use -- --vram-reserve-mib MIB.' >&2
+    return 2
   fi
-  if [[ -n ${STRATA_RAM_CAP_GIB:-} ]]; then
-    strata_server_args+=(--ram-cap "$STRATA_RAM_CAP_GIB")
+  # Flash-Next has a ranked resident budget; strata-poly has no equivalent.
+  if [[ $kind != flash && -n ${STRATA_RAM_CAP_GIB:-} ]]; then
+    echo 'STRATA_RAM_CAP_GIB is no longer supported for Qwen3.6; use an external memory limit.' >&2
+    return 2
   fi
   local engine=false arg
-  for arg in "$@"; do
-    if [[ "$arg" == -- && "$engine" == false ]]; then
+  while [[ $# -gt 0 ]]; do
+    arg=$1
+    shift
+    if [[ $arg == -- && $engine == false ]]; then
       engine=true
-    elif [[ "$engine" == true ]]; then
+    elif [[ $engine == true ]]; then
       strata_engine_args+=("$arg")
+    elif [[ $arg == --ctx=* ]]; then
+      strata_engine_args+=(--max-context "${arg#*=}")
+    elif [[ $arg == --mmproj=* ]]; then
+      strata_server_args+=("$arg")
+      if [[ $kind == flash ]]; then strata_engine_args+=(--vision); fi
+    elif [[ $arg == --ctx ]]; then
+      [[ $# -gt 0 ]] || { echo "$arg requires a value" >&2; return 2; }
+      strata_engine_args+=(--max-context "$1")
+      shift
+    elif [[ $arg == --image-max-tokens ]]; then
+      [[ $# -gt 0 ]] || { echo "$arg requires a value" >&2; return 2; }
+      strata_server_args+=(--image-max-tokens "$1")
+      shift
+    elif [[ $arg == --mmproj ]]; then
+      [[ $# -gt 0 ]] || { echo "$arg requires a value" >&2; return 2; }
+      strata_server_args+=(--mmproj "$1")
+      if [[ $kind == flash ]]; then strata_engine_args+=(--vision); fi
+      shift
     else
       strata_server_args+=("$arg")
     fi

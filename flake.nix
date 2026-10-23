@@ -27,7 +27,6 @@
               ./src
               ./include
               ./frontend
-              ./patches
               ./third_party/ggml
               ./tests
               ./tools
@@ -42,14 +41,14 @@
             ];
           };
           llamaSource = pkgs.fetchFromGitHub {
-            owner = "ggml-org";
+            owner = "robertkarl";
             repo = "llama.cpp";
-            rev = "3cf03257f219afbe7334045ff7c6a06ac68c627d";
-            hash = "sha256-SRGoXa+4ACBCB3eaG9XFYhMN1i0FyPEy9Rrer+dFGYI=";
+            rev = "385445fad49e42fa718b5e1f71668f35b7a08559";
+            hash = "sha256-U9xYwlyzNACah+wOnTfmU20leV0lnsWZgejGoBluYOQ=";
           };
           strata = pkgs.stdenv.mkDerivation {
             pname = "unbiased-strata-hip";
-            version = "0.1.39";
+            version = "0.1.45-poly.1";
             src = source;
             nativeBuildInputs = [
               pkgs.cmake
@@ -77,12 +76,14 @@
               runHook preBuild
               jobs="$NIX_BUILD_CORES"
               if [ "$jobs" -eq 0 ] || [ "$jobs" -gt 4 ]; then jobs=4; fi
-              cmake --build . --target unbiased-strata strata-device native_expert_parity --parallel "$jobs"
+              cmake --build . --target unbiased-strata strata strata-poly strata-device native_expert_parity --parallel "$jobs"
               runHook postBuild
             '';
             installPhase = ''
               runHook preInstall
               install -Dm755 unbiased-strata "$out/bin/unbiased-strata"
+              install -Dm755 strata "$out/bin/strata"
+              install -Dm755 strata-poly "$out/bin/strata-poly"
               install -Dm755 strata-device "$out/bin/strata-device"
               install -Dm755 native_expert_parity "$out/bin/native_expert_parity"
               runHook postInstall
@@ -175,7 +176,8 @@
               }
               ''
                 python ${packSource}/tools/iq_pack.py --gguf ${qwen38Model}/IQ3_XXS/${qwen38Shard1} \
-                  --out "$out/pack" --expert-profile ${./data/expert-profile.bin}
+                  --out "$out/pack"
+                cp ${./data/expert-profile.bin} "$out/pack/expert-profile.bin"
                 python ${packSource}/tools/mtp_pack.py --src ${qwen38MtpSource} \
                   --experts q2_0 --out mtp-q2_0.gguf
                 python ${packSource}/tools/mtp_rt.py --gguf mtp-q2_0.gguf --out "$out/mtp"
@@ -201,18 +203,6 @@
             ps.pyyaml
             ps.tqdm
           ]);
-          modelPack =
-            pkgs.runCommand "qwen36-q4-pack"
-              {
-                nativeBuildInputs = [ python ];
-                STRATA_GGUF_PY = "${llamaSource}/gguf-py";
-              }
-              ''
-                mkdir -p "$out"
-                python ${packSource}/tools/iq_pack.py --gguf ${model}/${modelFile} --out "$out/pack" \
-                  --expert-profile ${./data/qwen36-expert-profile.bin}
-                python ${packSource}/tools/mtp_qwen36_pack.py --gguf ${model}/${modelFile} --out "$out/mtp"
-              '';
           serveAio = pkgs.writeShellApplication {
             name = "strata-qwen36-aio";
             extraShellCheckFlags = [ "-x" ];
@@ -221,9 +211,8 @@
               load_strata_env
               strata_configure_args "$@"
               exec ${strata}/bin/unbiased-strata \
-                --model ${model}/${modelFile} \
-                --pack ${modelPack}/pack --mtp ${modelPack}/mtp \
-                "''${strata_server_args[@]}" -- "''${strata_engine_args[@]}"
+                --engine strata-poly --model ${model}/${modelFile} \
+                "''${strata_server_args[@]}" -- --model ${model}/${modelFile} "''${strata_engine_args[@]}"
             '';
           };
           aioLauncher = pkgs.writeShellApplication {
@@ -235,59 +224,23 @@
               exec nix run ${inputs.self}#legacyPackages.${system}.qwen36-aio -- "$@"
             '';
           };
-          prepareLocal = pkgs.writeShellApplication {
-            name = "strata-prepare-qwen36";
-            extraShellCheckFlags = [ "-x" ];
-            runtimeInputs = [
-              python
-              pkgs.coreutils
-            ];
-            text = ''
-              source ${launcherCommon}
-              load_strata_env
-              if [ "$#" -eq 2 ]; then
-                STRATA_MODEL=$1
-                STRATA_PREPARED_DIR=$2
-              elif [ "$#" -ne 0 ]; then
-                echo "usage: strata-prepare-qwen36 [MODEL.gguf OUTPUT_DIR]" >&2
-                exit 2
-              fi
-              if [ -z "$STRATA_MODEL" ]; then
-                echo "Set STRATA_MODEL in .env or pass MODEL.gguf OUTPUT_DIR" >&2
-                exit 2
-              fi
-              model=$(realpath -- "$STRATA_MODEL")
-              expected=55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1
-              actual=$(sha256sum -- "$model")
-              if [ "''${actual%% *}" != "$expected" ]; then
-                echo "Model SHA-256 mismatch: expected the pinned Q4_K_XL MTP file" >&2
-                exit 1
-              fi
-              export STRATA_GGUF_PY=${llamaSource}/gguf-py
-              python ${packSource}/tools/iq_pack.py --gguf "$model" --out "$STRATA_PREPARED_DIR/pack" \
-                --expert-profile ${./data/qwen36-expert-profile.bin}
-              python ${packSource}/tools/mtp_qwen36_pack.py --gguf "$model" --out "$STRATA_PREPARED_DIR/mtp"
-            '';
-          };
           serveLocal = pkgs.writeShellApplication {
             name = "strata-qwen36";
             extraShellCheckFlags = [ "-x" ];
             text = ''
               source ${launcherCommon}
               load_strata_env
-              if [ "$#" -ge 2 ] && [[ "$1" != -* ]]; then
+              if [ "$#" -ge 1 ] && [[ "$1" != -* ]]; then
                 STRATA_MODEL=$1
-                STRATA_PREPARED_DIR=$2
-                shift 2
+                shift
               fi
               if [ -z "$STRATA_MODEL" ]; then
-                echo "Set STRATA_MODEL in .env or pass MODEL.gguf PREPARED_DIR" >&2
+                echo "Set STRATA_MODEL in .env or pass MODEL.gguf" >&2
                 exit 2
               fi
               strata_configure_args "$@"
-              exec ${strata}/bin/unbiased-strata --model "$STRATA_MODEL" \
-                --pack "$STRATA_PREPARED_DIR/pack" --mtp "$STRATA_PREPARED_DIR/mtp" \
-                "''${strata_server_args[@]}" -- "''${strata_engine_args[@]}"
+              exec ${strata}/bin/unbiased-strata --engine strata-poly --model "$STRATA_MODEL" \
+                "''${strata_server_args[@]}" -- --model "$STRATA_MODEL" "''${strata_engine_args[@]}"
             '';
           };
           prepareQwen38 = pkgs.writeShellApplication {
@@ -332,8 +285,8 @@
               check_hash "$model" 219ea929900dfa9ef091f3aa473fdba6874b65fcb36526d7d851ac9e95856d15
               check_hash "$shard2" 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113
               export STRATA_GGUF_PY=${llamaSource}/gguf-py
-              python ${packSource}/tools/iq_pack.py --gguf "$model" --out "$STRATA_PREPARED_DIR/pack" \
-                --expert-profile ${./data/expert-profile.bin}
+              python ${packSource}/tools/iq_pack.py --gguf "$model" --out "$STRATA_PREPARED_DIR/pack"
+              cp ${./data/expert-profile.bin} "$STRATA_PREPARED_DIR/pack/expert-profile.bin"
               python ${packSource}/tools/mtp_pack.py --src "$STRATA_QWEN38_MTP_SOURCE" \
                 --experts q2_0 --out "$STRATA_PREPARED_DIR/mtp-q2_0.gguf"
               python ${packSource}/tools/mtp_rt.py --gguf "$STRATA_PREPARED_DIR/mtp-q2_0.gguf" \
@@ -363,9 +316,10 @@
               exec systemd-run --user --wait --pty --pipe --collect --quiet \
                 --unit=strata-qwen38 --working-directory="$PWD" \
                 -p "MemoryMax=''${STRATA_QWEN38_MEMORY_MAX:-48G}" -p MemorySwapMax=0 \
-                ${strata}/bin/unbiased-strata --model "$STRATA_MODEL" \
-                --pack "$STRATA_PREPARED_DIR/pack" --mtp "$STRATA_PREPARED_DIR/mtp" \
+                ${strata}/bin/unbiased-strata --engine strata --model "$STRATA_MODEL" \
                 "''${strata_server_args[@]}" -- \
+                --native "$STRATA_MODEL" --pack "$STRATA_PREPARED_DIR/pack" --mtp "$STRATA_PREPARED_DIR/mtp" \
+                --expert-profile "$STRATA_PREPARED_DIR/pack/expert-profile.bin" --expert-cache auto --prefill auto --spec 4 \
                 --resident-experts --ple-io mmap \
                 --vram-reserve-mib "''${STRATA_QWEN38_VRAM_RESERVE_MIB:-4096}" \
                 "''${strata_engine_args[@]}"
@@ -376,8 +330,8 @@
             runtimeInputs = [ strata ];
             text = ''
               strata-device
-              for pair in q4_K/q5_K q4_K/q6_K q5_K/q6_K; do
-                native_expert_parity --geom 2048x512 --synthetic "$pair"
+              for pair in q4_K/q5_1 q5_K/q5_1 q6_K/q5_1; do
+                native_expert_parity --synthetic "$pair"
               done
             '';
           };
@@ -386,7 +340,6 @@
           packages = {
             default = strata;
             inherit strata;
-            prepare-qwen36 = prepareLocal;
             qwen36 = serveLocal;
             qwen36-aio = aioLauncher;
             qwen36-aio-mm = aioMmLauncher;
@@ -423,17 +376,12 @@
             type = "app";
             program = "${serveLocal}/bin/strata-qwen36";
           };
-          apps.prepare-qwen36 = {
-            type = "app";
-            program = "${prepareLocal}/bin/strata-prepare-qwen36";
-          };
           apps.qwen36-aio = {
             type = "app";
             program = "${aioLauncher}/bin/strata-qwen36-aio";
           };
           legacyPackages = {
             inherit model;
-            model-pack = modelPack;
             qwen36-aio = serveAio;
             qwen36-mmproj = qwen36Projector;
             qwen36-aio-mm = serveAioMm;
@@ -453,14 +401,14 @@
             pkgs.runCommand "strata-pinned-mtp-fetch-tests"
               {
                 nativeBuildInputs = [ python ];
+                STRATA_GGUF_PY = "${llamaSource}/gguf-py";
               }
               ''
                 python ${./nix/verify-mtp-source-test.py} ${./nix/verify-mtp-source.py} \
                   ${./nix/qwen38-mtp-manifest.json} ${packSource}/tools
                 python ${./nix/mtp-fetch-pinned-test.py} ${./nix/mtp-fetch-pinned.py}
-                # The upstream Setup test imports the installer removed by this fork.
-                PYTHONPATH=${packSource}/tools python -m unittest test_mtp_fetch.Ranges test_mtp_fetch.Pinned
-                  touch "$out"
+                python -m unittest discover -s ${packSource}/tools -p test_iq_pack.py
+                touch "$out"
               '';
           checks.local-preparation =
             pkgs.runCommand "strata-local-preparation-tests"
@@ -472,7 +420,7 @@
               }
               ''
                 bash ${./nix/local-preparation-test.sh} \
-                  ${prepareLocal}/bin/strata-prepare-qwen36 ${prepareQwen38}/bin/strata-prepare-qwen38
+                  ${prepareQwen38}/bin/strata-prepare-qwen38
                 touch "$out"
               '';
           checks.launcher-config =
@@ -513,14 +461,29 @@
             '';
           checks.frontend = pkgs.stdenv.mkDerivation {
             name = "strata-frontend-tests";
-            src = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.unions [
-                ./Makefile
-                ./frontend
-              ];
-            };
-            buildPhase = "make test-frontend";
+            src = source;
+            nativeBuildInputs = [
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.python3
+              pkgs.curl
+            ];
+            postUnpack = strata.postUnpack;
+            postPatch = "patchShebangs frontend/tests";
+            cmakeFlags = [
+              "-DSTRATA_ENABLE_CUDA=OFF"
+              "-DSTRATA_BUILD_TESTS=OFF"
+            ];
+            buildPhase = ''
+              cmake --build . --target unbiased-strata engine_test literals_test picture_cache_test --parallel 4
+            '';
+            doCheck = true;
+            checkPhase = ''
+              ./engine_test "$PWD/../frontend/tests/fake-engine.py"
+              ./literals_test
+              ./picture_cache_test
+              bash ../frontend/tests/e2e.sh "$PWD/unbiased-strata"
+            '';
             installPhase = "touch $out";
           };
           devShells.default = pkgs.mkShell {
