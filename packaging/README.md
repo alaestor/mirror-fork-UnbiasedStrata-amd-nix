@@ -63,6 +63,51 @@ directory. Other settings at the top control build and output directories,
 the virtual environment, and parallel build jobs. The script verifies both
 model hashes before compiling or downloading.
 
+### Configure with .env
+
+The script sources `.env` from the repository root after setting its defaults.
+Only use a file you trust: it executes as Bash. Existing serving variables such
+as `STRATA_QWEN38_MODEL` do not configure this build script; use `MODEL` and the
+other names defined at its top. Keep configured paths relative to the repository
+root. `.env` is already Git-ignored.
+
+For the experimental DavidAU abliterated IQ3_S variant, put these settings in
+`.env`, keeping both shards in `models/`:
+
+```sh
+MODEL=models/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00001-of-00002.gguf
+MODEL_SHARD2=models/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00002-of-00002.gguf
+MODEL_SHA256=78706315c2fe912777c006b4ae18be1024c9f4353bd25d33b8a306c9c55f9e34
+MODEL_SHARD2_SHA256=316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113
+PREPARED_DIR=packs/qwen38-abliterated-iq3-s
+COMPAT_BF16=1
+CONTEXT=8192
+RAM_BUDGET_GIB=40
+MEMORY_MAX=48G
+VRAM_RESERVE_MIB=4096
+```
+
+These hashes come from the Hugging Face file metadata at
+[revision b1b82c3](https://huggingface.co/DavidAU/Qwen3.8-Flash-Next-Abliterated-Uncensored-Turbo-Brilliance-50x-Reasoning-Instruct-GSQ-RCO-GGUF/tree/b1b82c36770c826c41e1874f250228048cdb3f5c).
+They establish file identity, not engine support. `COMPAT_BF16=1` enables the
+packer's existing conversion path for quantized dense tensors, including PLE
+keys it cannot retain natively. Conversion changes rounding. Preparation,
+inference quality, and compatibility with the original model's MTP head remain
+unvalidated for this variant. The script still fetches the original pinned MTP
+tensors, not a variant-specific draft head. The larger variant also needs more
+storage than the default IQ3_XXS model.
+
+Launch with `bash packaging/run-qwen38-opensuse.sh` from the repository root to
+read these paths and sizing settings from `.env`. `CONTEXT` is in tokens,
+`RAM_BUDGET_GIB` is the engine's resident-memory budget in GiB, `MEMORY_MAX` is
+the systemd service limit, and `VRAM_RESERVE_MIB` is GPU sizing headroom in MiB.
+The launcher also accepts `HOST` and `PORT` in `.env`, defaulting to
+`127.0.0.1:8080`. These sizes are inherited defaults, not validated settings for
+the 16 GiB card or this variant. Reducing context may help with GPU memory
+pressure. Changing sizing settings does not require preparing the packs again.
+
+The explicit launch command below is an alternative that does not read `.env`.
+
 The script pins llama.cpp to the revision used by the flake and refuses local
 changes in that submodule. It installs Python dependencies in `.venv/` without
 changing system Python. CMake must discover ROCm's `clang++` as its HIP compiler,
