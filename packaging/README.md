@@ -105,6 +105,58 @@ The launcher also accepts `HOST` and `PORT` in `.env`, defaulting to
 the 16 GiB card or this variant. Reducing context may help with GPU memory
 pressure. Changing sizing settings does not require preparing the packs again.
 
+### Headless and SSH sessions
+
+The launcher requires a systemd user manager, but no desktop or lingering.
+Connect directly over SSH as the intended user rather than through `su` or
+`sudo -u`. A normal SSH login with PAM/systemd session integration should
+provide the user manager and runtime directory.
+
+The launcher discovers an existing user runtime directory and bus when SSH has
+not set `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`. It preserves nonempty
+values and refuses to launch if it cannot reach the user manager, rather than
+dropping the memory and swap limits. It does not change host configuration.
+
+If it fails, collect these diagnostics from a fresh, direct SSH login before
+changing host configuration:
+
+```sh
+id
+printf 'XDG_RUNTIME_DIR=%s\nDBUS_SESSION_BUS_ADDRESS=%s\n' "${XDG_RUNTIME_DIR:-}" "${DBUS_SESSION_BUS_ADDRESS:-}"
+loginctl session-status
+loginctl show-user "$(id -un)" -p State -p Linger -p RuntimePath
+sudo /usr/sbin/sshd -T | grep -i '^usepam '
+sudo systemctl status "user@$(id -u).service" "user-runtime-dir@$(id -u).service"
+sudo journalctl -b -u "user@$(id -u).service" --no-pager -n 80
+```
+
+An administrator should use the results to check the effective SSH PAM setting,
+the PAM session stack's systemd integration, and any user-manager startup
+failure. Missing environment variables alone do not identify the cause. Do not
+create the runtime directory or bus by hand, or blindly edit PAM configuration.
+After fixing login-session setup, reconnect and rerun the launcher.
+
+Enable lingering only if you deliberately want the account's user manager and
+services to run without logged-in sessions. `sudo loginctl enable-linger
+<login-name>` enables it; `sudo loginctl disable-linger <login-name>` undoes it.
+Lingering changes account-wide logout behavior: the user manager and its
+services can survive the last logout, so logging back in may reuse their
+environment rather than start fresh.
+
+For manual `systemctl --user` commands or the explicit launch command below,
+an SSH shell missing these variables can use the following after the user
+manager has started:
+
+```sh
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+systemctl --user status
+```
+
+The launcher exports these variables only in its own process; it cannot update
+the calling shell. Lingering also does not make the foreground launcher survive
+an SSH disconnect. Use a persistent terminal such as `tmux` if needed.
+
 The explicit launch command below is an alternative that does not read `.env`.
 
 The script pins llama.cpp to the revision used by the flake and refuses local

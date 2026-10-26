@@ -22,6 +22,25 @@ done
   echo 'Model or prepared packs missing; run packaging/build-qwen38-opensuse.sh first.' >&2
   exit 1
 }
+# SSH shells may not inherit the user manager's environment. Only discover an
+# existing runtime directory/bus; creating them requires host administration.
+if [[ -z ${XDG_RUNTIME_DIR:-} && -d /run/user/$UID && -O /run/user/$UID ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$UID"
+fi
+if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} && -n ${XDG_RUNTIME_DIR:-} && -S $XDG_RUNTIME_DIR/bus ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
+if ! systemctl --user show-environment >/dev/null; then
+  cat >&2 <<'EOF'
+Cannot connect to the systemd user manager. A desktop is not required.
+Use a direct SSH login as the intended user, not a switched-user shell.
+If that still fails, ask an administrator to inspect the SSH/PAM session
+and user-manager status. Lingering is not required for a normal SSH session.
+See packaging/README.md under "Headless and SSH sessions".
+Refusing to launch without the systemd memory and swap limits.
+EOF
+  exit 1
+fi
 exec systemd-run --user --wait --pty --collect \
   --unit=strata-qwen38 --working-directory="$PWD" \
   -p "MemoryMax=$MEMORY_MAX" -p MemorySwapMax=0 \
