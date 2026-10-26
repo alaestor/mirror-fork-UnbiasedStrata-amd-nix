@@ -3,7 +3,10 @@
 [build-qwen38-opensuse.sh](build-qwen38-opensuse.sh) builds the HIP engines and
 API server for `gfx1201`, then prepares Qwen3.8-Flash-Next IQ3_XXS and its MTP
 draft head. It does not require Nix, install system packages, or start the server.
-This native workflow has not yet been validated end to end on openSUSE.
+Confirmed working on openSUSE with a Radeon RX 9070 XT AORUS E 16G and
+64 GB of RAM, with a reported decode rate of 46 tokens/s using DavidAU's
+`Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S` quant. This is a user-reported
+result, not a controlled benchmark or a guarantee for other settings.
 
 ## Requirements
 
@@ -60,8 +63,8 @@ bash packaging/build-qwen38-opensuse.sh
 
 All configured paths are relative to the working directory, not the script's
 directory. Other settings at the top control build and output directories,
-the virtual environment, and parallel build jobs. The script verifies both
-model hashes before compiling or downloading.
+the virtual environment, and parallel build jobs. The script checks that both
+model shards exist; it does not hash their contents.
 
 ### Configure with .env
 
@@ -77,8 +80,6 @@ For the experimental DavidAU abliterated IQ3_S variant, put these settings in
 ```sh
 MODEL=models/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00001-of-00002.gguf
 MODEL_SHARD2=models/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00002-of-00002.gguf
-MODEL_SHA256=78706315c2fe912777c006b4ae18be1024c9f4353bd25d33b8a306c9c55f9e34
-MODEL_SHARD2_SHA256=316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113
 PREPARED_DIR=packs/qwen38-abliterated-iq3-s
 COMPAT_BF16=1
 CONTEXT=8192
@@ -87,13 +88,11 @@ MEMORY_MAX=48G
 VRAM_RESERVE_MIB=4096
 ```
 
-These hashes come from the Hugging Face file metadata at
-[revision b1b82c3](https://huggingface.co/DavidAU/Qwen3.8-Flash-Next-Abliterated-Uncensored-Turbo-Brilliance-50x-Reasoning-Instruct-GSQ-RCO-GGUF/tree/b1b82c36770c826c41e1874f250228048cdb3f5c).
-They establish file identity, not engine support. `COMPAT_BF16=1` enables the
+`COMPAT_BF16=1` enables the
 packer's existing conversion path for quantized dense tensors, including PLE
-keys it cannot retain natively. Conversion changes rounding. Preparation,
-inference quality, and compatibility with the original model's MTP head remain
-unvalidated for this variant. The script still fetches the original pinned MTP
+keys it cannot retain natively. Conversion changes rounding. The reported
+working configuration does not establish inference quality or compatibility
+with the original model's MTP head. The script still fetches the original pinned MTP
 tensors, not a variant-specific draft head. The larger variant also needs more
 storage than the default IQ3_XXS model.
 
@@ -132,11 +131,14 @@ Keep the original GGUF shards in place. The prepared model pack still uses them.
 
 ## Reruns and failures
 
-Rerunning the same command verifies the model hashes, performs an incremental
-build, checks Python dependencies, and verifies downloaded MTP tensors. Valid
+Rerunning the same command performs an incremental build, checks Python
+dependencies, and verifies downloaded MTP tensors. Valid
 MTP inputs do not need another download. Completed preparation stages are
 skipped using completion markers tied to the tools, pinned source, and model
-location. The markers do not verify every prepared output's contents.
+location. The markers do not verify model contents or every prepared output.
+If you replace a model at the same path, use a fresh `PREPARED_DIR`.
+Removing model hashes changes existing completion fingerprints; use a fresh
+`PREPARED_DIR` if an older pack is reported as stale.
 
 If the source or model location changes, the script refuses stale packs rather
 than overwriting them. Set `PREPARED_DIR` to a fresh directory and rerun. Use a
@@ -192,3 +194,52 @@ curl --fail http://127.0.0.1:8080/health
 
 Stop with Ctrl-C or `systemctl --user stop strata-qwen38`. See the
 [main README](../README.md#configuration-and-api) for an API request example.
+
+## Memory controller setup
+
+Both the openSUSE launcher and Nix Qwen3.8 launcher check cgroup memory files
+inside the service before loading weights. They refuse startup if the service
+or an ancestor lacks the files needed for resident RAM detection. A configured
+`MemoryMax` alone does not prove that the limit is enforced.
+
+On affected openSUSE hosts, only the `pids` controller was enabled for user
+services. The engine then reported `cannot determine available memory`, built
+no resident expert copy, and fell back to file-cache reads. The preflight check
+detects this condition instead of silently accepting slower startup behavior.
+
+Stop Strata before changing accounting:
+
+```sh
+systemctl --user stop strata-qwen38.service
+```
+
+Enable persistent accounting on the parent units. Replace `1000` with your
+numeric user ID from `id -u` if different:
+
+```sh
+sudo systemctl set-property user.slice MemoryAccounting=yes
+sudo systemctl set-property user-1000.slice MemoryAccounting=yes
+sudo systemctl set-property user@1000.service MemoryAccounting=yes
+systemctl --user daemon-reexec
+systemctl --user set-property app.slice MemoryAccounting=yes
+```
+
+These commands persist across reboots. They do not grant privileges or impose
+new limits on other applications, but they enable accounting for user services
+and add bookkeeping overhead. The launcher's memory and swap limits now take
+effect: reaching the memory ceiling can trigger an in-service OOM kill. Leave
+room for the OS and other applications; a 62 GiB ceiling on a 64 GB machine is
+not a reservation and provides little guaranteed headroom.
+
+Relaunch Strata, then verify in another terminal:
+
+```sh
+systemctl --user --no-pager show strata-qwen38.service -p MemoryCurrent -p MemoryMax
+cg=$(systemctl --user show strata-qwen38.service -p ControlGroup --value)
+cat "/sys/fs/cgroup$cg/memory.max" "/sys/fs/cgroup$cg/memory.current"
+```
+
+Both files must exist and report numbers. Check the engine's `resident RAM mode`
+line to confirm the resident copy was built; service memory includes file cache
+and is not a measurement of resident expert bytes alone. The launchers never
+change host accounting settings automatically.

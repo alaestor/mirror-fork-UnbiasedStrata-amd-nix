@@ -264,7 +264,7 @@
                 echo "Set STRATA_QWEN38_MODEL and STRATA_QWEN38_MTP_SOURCE to local inputs (no downloads)" >&2
                 exit 2
               fi
-              # Fail before hashing 76 GB or writing outputs if the draft input is absent/bad.
+              # Fail before writing outputs if the draft input is absent/bad.
               python ${./nix/verify-mtp-source.py} "$STRATA_QWEN38_MTP_SOURCE" ${./nix/qwen38-mtp-manifest.json}
               model=$(realpath -- "$STRATA_MODEL")
               suffix=-00001-of-00002.gguf
@@ -273,17 +273,8 @@
                 exit 2
               fi
               shard2="''${model%"$suffix"}-00002-of-00002.gguf"
+              test -f "$model"
               test -f "$shard2"
-              check_hash() {
-                local actual
-                actual=$(sha256sum -- "$1")
-                if [[ "''${actual%% *}" != "$2" ]]; then
-                  echo "Model SHA-256 mismatch: $1" >&2
-                  exit 1
-                fi
-              }
-              check_hash "$model" 219ea929900dfa9ef091f3aa473fdba6874b65fcb36526d7d851ac9e95856d15
-              check_hash "$shard2" 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113
               export STRATA_GGUF_PY=${llamaSource}/gguf-py
               python ${packSource}/tools/iq_pack.py --gguf "$model" --out "$STRATA_PREPARED_DIR/pack"
               cp ${./data/expert-profile.bin} "$STRATA_PREPARED_DIR/pack/expert-profile.bin"
@@ -316,6 +307,7 @@
               exec systemd-run --user --wait --pty --pipe --collect --quiet \
                 --unit=strata-qwen38 --working-directory="$PWD" \
                 -p "MemoryMax=''${STRATA_QWEN38_MEMORY_MAX:-48G}" -p MemorySwapMax=0 \
+                ${pkgs.bash}/bin/bash ${./nix/memory-preflight.sh} \
                 ${strata}/bin/unbiased-strata --engine strata --model "$STRATA_MODEL" \
                 "''${strata_server_args[@]}" -- \
                 --native "$STRATA_MODEL" --pack "$STRATA_PREPARED_DIR/pack" --mtp "$STRATA_PREPARED_DIR/mtp" \
@@ -430,6 +422,7 @@
               }
               ''
                 bash ${./nix/launcher-common-test.sh} ${launcherCommon}
+                bash ${./nix/memory-preflight-test.sh} ${./nix/memory-preflight.sh}
                 touch "$out"
               '';
           checks.aio-mm =

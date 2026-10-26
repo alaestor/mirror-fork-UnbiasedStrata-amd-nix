@@ -10,8 +10,6 @@ MTP_SOURCE=mtp/qwen38-source
 VENV=.venv
 JOBS=4
 LLAMA_REV=385445fad49e42fa718b5e1f71668f35b7a08559
-MODEL_SHA256=219ea929900dfa9ef091f3aa473fdba6874b65fcb36526d7d851ac9e95856d15
-MODEL_SHARD2_SHA256=316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113
 COMPAT_BF16=0
 
 die() { echo "$*" >&2; exit 1; }
@@ -22,7 +20,6 @@ if [[ -f .env ]]; then
   source .env
 fi
 [[ "$COMPAT_BF16" == 0 || "$COMPAT_BF16" == 1 ]] || die 'COMPAT_BF16 must be 0 or 1.'
-[[ "$MODEL_SHA256" =~ ^[[:xdigit:]]{64}$ && "$MODEL_SHARD2_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || die 'Supply both model SHA-256 hashes.'
 for command in git cmake ninja python3 sha256sum flock; do
   command -v "$command" >/dev/null || die "Missing command: $command"
 done
@@ -31,11 +28,8 @@ mkdir -p "$BUILD_DIR"
 exec 9>"$BUILD_DIR/native-preparation.lock"
 flock -n 9 || die 'Another build/preparation is running.'
 
-# Validate before compiling or downloading. Recheck on every run.
-printf '%s  %s\n' \
-  "$MODEL_SHA256" "$MODEL" \
-  "$MODEL_SHARD2_SHA256" "$MODEL_SHARD2" |
-  sha256sum --check
+# Check paths without reading the multi-gigabyte model shards.
+[[ -f "$MODEL" && -f "$MODEL_SHARD2" ]] || die 'Both model shards must exist.'
 [[ "$MODEL_SHARD2" == "${MODEL%-00001-of-00002.gguf}-00002-of-00002.gguf" ]] ||
   die 'Keep the original shard filenames together in one directory.'
 
@@ -64,7 +58,7 @@ export STRATA_GGUF_PY="$PWD/third_party/llama.cpp/gguf-py"
 # after source changes. Failed stages leave their temporary directory for review.
 mkdir -p "$PREPARED_DIR"
 fingerprint=$(
-  { printf '%s\n' "$PWD/$MODEL" "$LLAMA_REV" "$MODEL_SHA256" "$MODEL_SHARD2_SHA256" "$COMPAT_BF16";
+  { printf '%s\n' "$PWD/$MODEL" "$LLAMA_REV" "$COMPAT_BF16";
     sha256sum tools/*.py data/expert-profile.bin data/draft_vocab.bin \
       nix/qwen38-mtp-manifest.json nix/mtp-fetch-pinned.py nix/verify-mtp-source.py;
   } | sha256sum

@@ -25,6 +25,7 @@ done
 exec systemd-run --user --wait --pty --collect \
   --unit=strata-qwen38 --working-directory="$PWD" \
   -p "MemoryMax=$MEMORY_MAX" -p MemorySwapMax=0 \
+  bash "$PWD/nix/memory-preflight.sh" \
   "$PWD/$BUILD_DIR/unbiased-strata" --engine "$PWD/$BUILD_DIR/strata" \
   --model "$PWD/$MODEL" --host "$HOST" --port "$PORT" -- \
   --native "$PWD/$MODEL" --pack "$PWD/$PREPARED_DIR/pack" --mtp "$PWD/$PREPARED_DIR/mtp" \

@@ -259,14 +259,20 @@ use `qwen38-aio`.
 STRATA_QWEN38_MTP_SOURCE="/models/qwen38/mtp-bf16"
 ```
 
-Preparation checks the manifest and every tensor hash offline before hashing
-the GGUF shards or writing packs. Missing or corrupt inputs are errors, never
-reasons to download. It then verifies both GGUFs, builds the native pack, and
+Preparation checks the manifest and every tensor hash offline before writing
+packs. Missing or corrupt MTP inputs are errors, never reasons to download.
+It checks that both GGUF shards exist, builds the native pack, and
 quantizes the supplied draft head locally. Source tensors are read-only;
 generated files stay in `STRATA_QWEN38_PREPARED_DIR`. Serving uses only the
 GGUF shards and generated packs; it does not need the raw tensors.
 
-The launcher requires a working systemd user manager. It runs a transient service
+The launcher requires a working systemd user manager and cgroup v2 memory
+control. It checks memory-controller files inside the service before loading
+weights; see [memory controller setup](../packaging/README.md#memory-controller-setup)
+if startup fails. Model shards are not hashed during local preparation; use a
+fresh output directory when replacing them.
+
+It runs a transient service
 named `strata-qwen38`, with `MemoryMax=48G` and `MemorySwapMax=0`. This limits
 cgroup-charged memory, including file cache, without changing host swap settings.
 `STRATA_QWEN38_MEMORY_MAX` changes the total limit.
