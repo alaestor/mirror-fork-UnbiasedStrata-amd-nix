@@ -55,4 +55,22 @@ CONFIG
 STRATA_MODEL=/ignored.gguf
 load_strata_env
 [[ $STRATA_MODEL == '/models/local model.gguf' && $STRATA_CTX == 4096 ]]
-echo 'PASS: engine routing, images, unsupported caps, missing values/config'
+# Shared sampling overrides preserve zero and precede CLI overrides, never engine options.
+unset STRATA_RAM_CAP_GIB
+cat >> "$STRATA_ENV_FILE" <<'CONFIG'
+STRATA_TEMPERATURE=0
+STRATA_TOP_P=0.8
+STRATA_TOP_K=20
+STRATA_MIN_P=0
+STRATA_PRESENCE_PENALTY=0
+STRATA_REPEAT_PENALTY=1
+CONFIG
+load_strata_env
+strata_configure_args --temp 0.6 -- --lookup 0
+[[ ${strata_server_args[*]} == *'--temp 0 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1'*'--temp 0.6' ]]
+[[ ${strata_engine_args[*]} != *--temp* ]]
+echo 'STRATA_TEMPERATURE=' >> "$STRATA_ENV_FILE"
+load_strata_env
+strata_configure_sampling
+[[ ${strata_sampling_args[*]} != *--temp* ]]
+echo 'PASS: engine routing, images, sampling overrides, unsupported caps, missing values/config'

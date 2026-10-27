@@ -24,8 +24,27 @@ load_qwen38_env() {
   STRATA_VISION_TOKENS=${STRATA_QWEN38_VISION_TOKENS:-1024}
 }
 
+strata_configure_sampling() {
+  strata_sampling_args=()
+  local name flag
+  while read -r name flag; do
+    if [[ -n ${!name:-} ]]; then
+      strata_sampling_args+=("$flag" "${!name}")
+    fi
+  done <<'SAMPLING'
+STRATA_TEMPERATURE --temp
+STRATA_TOP_P --top-p
+STRATA_TOP_K --top-k
+STRATA_MIN_P --min-p
+STRATA_PRESENCE_PENALTY --presence-penalty
+STRATA_REPEAT_PENALTY --repeat-penalty
+SAMPLING
+}
+
 strata_configure_args() {
   strata_server_args=(--host "${STRATA_HOST:-127.0.0.1}" --port "${STRATA_PORT:-8080}")
+  strata_configure_sampling
+  strata_server_args+=("${strata_sampling_args[@]}")
   local kv=${STRATA_KV:-} kind=${STRATA_ENGINE_KIND:-poly}
   if [[ $kind == flash ]]; then
     kv=${kv:-q4_0}

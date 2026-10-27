@@ -196,7 +196,11 @@ The default development shell and preparation/fetch checks also include Python. 
 
 ## Edits to upstream files
 
-- [CMakeLists.txt](CMakeLists.txt): guard absent optional HIP sources and link strata-poly's HIP MMQ target to hipBLAS.
+- [CMakeLists.txt](CMakeLists.txt): guard absent optional HIP sources, link strata-poly's HIP MMQ target to hipBLAS, and build sampling tests.
+- [Makefile](Makefile): run sampling policy and HTTP regression tests.
+- [Frontend entry point](frontend/main.cpp): preserve explicit presence-penalty overrides.
+- [Frontend context](frontend/strata_context.cpp) and [interface](frontend/strata_context.hpp): select model-card sampling defaults with server and request overrides.
+- [Fake engine](frontend/tests/fake-engine.py): capture engine requests for sampling regression tests.
 - [GPU parity diagnostic](src/kernels/native_expert_parity.cpp): report FP16 signed-zero differences separately from weight mismatches.
 - [.gitignore](.gitignore): ignore local `.env` and Nix result links.
 - [README.md](README.md): document this fork's AMD/Nix workflows, serving lifecycle, and tested scope.

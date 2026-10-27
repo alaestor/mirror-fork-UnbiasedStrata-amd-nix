@@ -5,6 +5,47 @@ including the RX 7900 XTX. It does not run upstream's installer. Strata has no
 Vulkan backend. Enabling llama.cpp's Vulkan backend would not port Strata's own
 GPU kernels.
 
+## Sampling defaults
+
+The API server selects the base model's recommended sampling preset using GGUF
+architecture metadata and the request's thinking mode. Filenames do not affect
+selection, so a derivative such as DavidAU's abliterated Qwen3.8 uses the Qwen3.8
+preset if it retains `general.architecture = qwen4exp`. This does not fetch or
+interpret a derivative's own model card. Unknown architectures retain llama.cpp's
+generic defaults.
+
+| Model and mode | Temperature | Top-p | Top-k | Min-p | Presence penalty |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3.8 thinking | 1.0 | 0.95 | 20 | 0 | 0 |
+| Qwen3.6 thinking, general tasks | 1.0 | 0.95 | 20 | 0 | 1.5 |
+| Either, non-thinking | 0.7 | 0.80 | 20 | 0 | 1.5 |
+
+Repeat penalty defaults to 1.0. Sources: [Qwen3.8 Best Practices](https://huggingface.co/Qwen/Qwen3.8-Flash-Next#best-practices)
+and [Qwen3.6 Best Practices](https://huggingface.co/Qwen/Qwen3.6-35B-A3B#best-practices).
+
+Overrides apply per field: model preset, then server configuration, then request.
+Both Nix and native openSUSE serving accept these optional `.env` variables:
+`STRATA_TEMPERATURE`, `STRATA_TOP_P`, `STRATA_TOP_K`, `STRATA_MIN_P`,
+`STRATA_PRESENCE_PENALTY`, and `STRATA_REPEAT_PENALTY`. Unset or empty values leave
+the field automatic; zero is an explicit override. For Qwen3.6 precise coding,
+the card recommends `STRATA_TEMPERATURE=0.6` and `STRATA_PRESENCE_PENALTY=0`.
+
+Nix launcher flags override `.env`, for example:
+
+```sh
+nix run .#qwen38 -- --temp 0.6 --presence-penalty 0
+```
+
+Requests can override those defaults with `temperature`, `top_p`, `top_k`,
+`min_p`, `presence_penalty`, and `repeat_penalty`. Null fields count as omitted. A request with
+`"temperature": 0` uses greedy decoding. Setting
+`"chat_template_kwargs": {"enable_thinking": false}` or `"reasoning_effort": "none"`
+selects the non-thinking preset for fields not explicitly overridden. Server
+`--chat-template-kwargs` also supplies the default thinking mode. Raw completion
+endpoints use the server's default mode. The startup log shows both sampling
+presets after server overrides. Restart a running server after changing `.env`;
+request overrides take effect immediately.
+
 ## Local weights
 
 Download the pinned [Q4_K_XL file from the MTP repository](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/5bc3e238d916f48a861bac2f8a1990a0e9b7e98d/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf),

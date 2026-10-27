@@ -7,6 +7,7 @@
 #include "engine.hpp"
 #include "literals.hpp"
 #include "picture_cache.hpp"
+#include "sampling_defaults.hpp"
 
 #include "server-common.h"
 #include "server-task.h"
@@ -169,6 +170,12 @@ std::string file_stem(const std::string & path) {
 
 struct strata_context_impl {
     common_params params;
+    std::string sampling_arch;
+    bool presence_penalty_override = false;
+
+    json sampling_defaults(bool thinking) const {
+        return strata_frontend::sampling_defaults(sampling_arch, thinking, params.sampling, presence_penalty_override);
+    }
 
     llama_model *       model = nullptr;
     const llama_vocab * vocab = nullptr;
@@ -1093,7 +1100,11 @@ struct strata_context_impl {
             server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
             task.id     = rd.get_new_id();
             task.tokens = std::move(inputs[0]);
-            task.params = server_schema::eval_llama_cmpl_schema(vocab, params, logit_bias_eog, data);
+            json resolved = data;
+            const bool thinking = strata_frontend::sampling_thinking(
+                json::object(), chat_params.enable_thinking, chat_params.chat_template_kwargs);
+            strata_frontend::fill_sampling_defaults(resolved, sampling_defaults(thinking));
+            task.params = server_schema::eval_llama_cmpl_schema(vocab, params, logit_bias_eog, resolved);
             if (task.params.n_cmpl > 1) {
                 throw std::invalid_argument("n > 1 is not supported by this server");
             }
@@ -1259,9 +1270,10 @@ void strata_context::set_picture_cache(size_t entries, size_t bytes) {
     impl->pictures.configure(entries, bytes);
 }
 
-bool strata_context::load(common_params & params, std::string & err) {
+bool strata_context::load(common_params & params, std::string & err, bool presence_penalty_override) {
     auto & I = *impl;
     I.params = params;
+    I.presence_penalty_override = presence_penalty_override;
 
     // the vocabulary and the chat template, from the GGUF's metadata; no tensor is read
     llama_model_params mparams = llama_model_default_params();
@@ -1285,6 +1297,15 @@ bool strata_context::load(common_params & params, std::string & err) {
         return false;
     }
     I.vocab      = llama_model_get_vocab(I.model);
+    char arch[128] = {};
+    if (llama_model_meta_val_str(I.model, "general.architecture", arch, sizeof arch) > 0) I.sampling_arch = arch;
+    for (bool thinking : {true, false}) {
+        const auto defaults = I.sampling_defaults(thinking);
+        if (!defaults.empty()) {
+            SRV_INF("sampling defaults (%s, %s): %s; request fields override these\n", I.sampling_arch.c_str(),
+                    thinking ? "thinking" : "non-thinking", defaults.dump().c_str());
+        }
+    }
     I.init_literals();
     I.model_path = params.model.path;
     I.model_name = params.model_alias.empty() ? file_stem(params.model.path) : *params.model_alias.begin();
@@ -1443,6 +1464,9 @@ void strata_context::init_routes(server_http_context & http) {
             marked = I->literals.mark_request(body.at("messages"), tools);
         }
         json data = oaicompat_chat_params_parse(body, I->chat_params, files);
+        const bool thinking = strata_frontend::sampling_thinking(
+            body, I->chat_params.enable_thinking, I->chat_params.chat_template_kwargs);
+        strata_frontend::fill_sampling_defaults(data, I->sampling_defaults(thinking));
         if (marked) {
             std::string prompt = data.at("prompt").get<std::string>();
             plain = I->literals.unmark(prompt);

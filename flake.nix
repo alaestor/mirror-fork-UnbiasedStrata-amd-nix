@@ -496,13 +496,15 @@
               "-DSTRATA_BUILD_TESTS=OFF"
             ];
             buildPhase = ''
-              cmake --build . --target unbiased-strata engine_test literals_test picture_cache_test --parallel 4
+              cmake --build . --target unbiased-strata engine_test literals_test picture_cache_test sampling_defaults_test --parallel 4
             '';
             doCheck = true;
             checkPhase = ''
               ./engine_test "$PWD/../frontend/tests/fake-engine.py"
               ./literals_test
               ./picture_cache_test
+              ./sampling_defaults_test
+              python3 ../frontend/tests/sampling-defaults-e2e.py "$PWD/unbiased-strata"
               bash ../frontend/tests/e2e.sh "$PWD/unbiased-strata"
             '';
             installPhase = "touch $out";

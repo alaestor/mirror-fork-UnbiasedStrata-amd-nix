@@ -52,6 +52,8 @@ void usage() {
         "  -m, --model FILE       the GGUF the vocabulary and chat template are read from (no tensors are loaded)\n"
         "  --host, --port, --api-key, --threads-http, --temp, --top-k, --top-p, --min-p, --reasoning-format,\n"
         "  --chat-template-kwargs, --alias ...   llama-server options (see llama-server --help)\n"
+        "                         Qwen3.6/3.8 sampling defaults follow the model card and thinking mode;\n"
+        "                         explicit sampling flags override the card, request fields override flags\n"
         "  --mmproj FILE          the model's vision projector: image_url parts are encoded in this process and\n"
         "                         handed to the engine (Qwen family); on the CPU (--threads N) unless --mmproj-gpu\n"
         "  --mmproj-gpu           encode on the card: about 1 GB of VRAM plus work buffers, taken before the engine\n"
@@ -194,7 +196,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!ctx_server.load(params, err)) {
+    // llama.cpp tracks explicit sampling flags, but not --presence-penalty. Preserve an explicit zero too.
+    bool presence_penalty_override = false;
+    for (const char * arg : llama_argv) {
+        const std::string a = arg;
+        if (a == "--presence-penalty" || a.rfind("--presence-penalty=", 0) == 0) presence_penalty_override = true;
+    }
+    if (!ctx_server.load(params, err, presence_penalty_override)) {
         SRV_ERR("%s\n", err.c_str());
         clean_up();
         if (ctx_http.thread.joinable()) {

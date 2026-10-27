@@ -31,7 +31,7 @@ struct strata_context {
     bool start_engine(const common_params & params, const std::string & engine_exe, const std::vector<std::string> & engine_args, std::string & err);
 
     // Loads the vocabulary and chat template from the GGUF (vocab only, no tensors) and waits for the engine's READY.
-    bool load(common_params & params, std::string & err);
+    bool load(common_params & params, std::string & err, bool presence_penalty_override = false);
     // --picture-cache: how many pictures' encoded rows are kept for the turns that resend them (0: none); before load()
     void set_picture_cache(size_t entries, size_t bytes);
 

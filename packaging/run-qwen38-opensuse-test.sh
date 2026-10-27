@@ -38,6 +38,12 @@ MODEL='model shard.gguf'
 PREPARED_DIR='packs with spaces'
 PORT=8123
 MEMORY_MAX=42G
+STRATA_TEMPERATURE=0
+STRATA_TOP_P=0.8
+STRATA_TOP_K=20
+STRATA_MIN_P=0
+STRATA_PRESENCE_PENALTY=0
+STRATA_REPEAT_PENALTY=1
 ENV
 cd "$work/repo"
 run() {
@@ -63,6 +69,13 @@ for arg in --user --collect --unit=strata-qwen38.service --service-type=exec \
   has_arg "$arg"
 done
 no_arg --pty
+for flag in --temp --top-p --top-k --min-p --presence-penalty --repeat-penalty; do
+  has_arg "$flag"
+done
+# Sampling flags belong to the frontend, before the engine separator; zeros survive.
+sed -n '/--temp/,/^--$/p' "$CALL_LOG" > "$work/sampling"
+printf '%s\n' --temp 0 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 --repeat-penalty 1 -- > "$work/expected-sampling"
+diff -u "$work/expected-sampling" "$work/sampling"
 no_arg --wait
 output_has 'http://127.0.0.1:8123'
 output_has 'API readiness is not yet confirmed'
@@ -131,6 +144,16 @@ has_arg --unit=strata-qwen38.service
 cd "$work/repo"
 run 0 start
 has_arg systemd-run
+# Empty/unset sampling settings leave model-card selection to the frontend.
+cat > .env <<'ENV'
+MODEL='model shard.gguf'
+PREPARED_DIR='packs with spaces'
+STRATA_TEMPERATURE=
+ENV
+run 0 start
+for flag in --temp --top-p --top-k --min-p --presence-penalty --repeat-penalty; do
+  no_arg "$flag"
+done
 rm "$work/repo/model shard.gguf"
 run 1 start
 output_has 'Model or prepared packs missing'

@@ -105,6 +105,17 @@ The launcher also accepts `HOST` and `PORT` in `.env`, defaulting to
 the 16 GiB card or this variant. Reducing context may help with GPU memory
 pressure. Changing sizing settings does not require preparing the packs again.
 
+### Sampling
+
+The server uses Qwen3.8's model-card defaults, including for derivatives that
+retain its GGUF architecture metadata. The native launcher accepts the same
+`STRATA_TEMPERATURE`, `STRATA_TOP_P`, `STRATA_TOP_K`, `STRATA_MIN_P`,
+`STRATA_PRESENCE_PENALTY`, and `STRATA_REPEAT_PENALTY` `.env` overrides as Nix.
+Leave a variable unset or empty to use the preset; zero is an explicit override.
+Per-request settings take precedence. See [sampling defaults](../docs/nix-amd.md#sampling-defaults)
+for the presets, thinking-mode selection, and request fields. Rebuild the API
+server to get this policy, then restart it after changing `.env`.
+
 ### Headless and SSH sessions
 
 The launcher requires a systemd user manager, but no desktop or lingering.

@@ -15,6 +15,7 @@ Environment variables choose the answers, so one script covers the cases:
   FAKE_DIE_AFTER  if set, exit 3 after emitting this many tokens of the first request
   FAKE_NO_STOP    if set, READY without "stop": STOP is ignored and the request runs to its end
   FAKE_PROMPT_N   if set, lie about the prompt size in DONE (mismatch test)
+  FAKE_REQUEST_LOG append received request lines to this file (sampling tests)
 """
 import os
 import select
@@ -65,6 +66,9 @@ def stop_requested():
 
 while True:
     line = readline()
+    if env("FAKE_REQUEST_LOG"):
+        with open(env("FAKE_REQUEST_LOG"), "a") as log:
+            log.write(line + "\n")
     if line == "QUIT":
         sys.exit(0)
     if line == "STOP" or line == "":

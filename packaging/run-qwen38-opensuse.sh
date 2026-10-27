@@ -102,6 +102,9 @@ if [[ -f .env ]]; then
   # shellcheck disable=SC1091
   source .env
 fi
+# shellcheck source=nix/launcher-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../nix/launcher-common.sh"
+strata_configure_sampling
 for value in "$CONTEXT" "$RAM_BUDGET_GIB" "$VRAM_RESERVE_MIB" "$PORT"; do
   [[ "$value" =~ ^[0-9]+$ ]] || { echo 'Sizes and port must be nonnegative integers.' >&2; exit 1; }
 done
@@ -120,7 +123,7 @@ else
 fi
 server_args=(bash "$PWD/nix/memory-preflight.sh"
   "$PWD/$BUILD_DIR/unbiased-strata" --engine "$PWD/$BUILD_DIR/strata"
-  --model "$PWD/$MODEL" --host "$HOST" --port "$PORT" --
+  --model "$PWD/$MODEL" --host "$HOST" --port "$PORT" "${strata_sampling_args[@]}" --
   --native "$PWD/$MODEL" --pack "$PWD/$PREPARED_DIR/pack" --mtp "$PWD/$PREPARED_DIR/mtp"
   --expert-profile "$PWD/$PREPARED_DIR/pack/expert-profile.bin"
   --max-context "$CONTEXT" --kv q4_0 --resident-budget-gib "$RAM_BUDGET_GIB"
