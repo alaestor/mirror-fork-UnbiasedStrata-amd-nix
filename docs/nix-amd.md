@@ -93,14 +93,68 @@ Qwen3.8 serving accepts shard 1 and its prepared directory before any flags.
 Its preparation command accepts these two paths without additional flags.
 Both `-aio` launchers ignore configured model, draft-source, and pack paths,
 using their bundled pinned artifacts instead. Their context, API, threading, KV,
-and memory-tier settings still apply. Qwen3.6 launchers run in the foreground without the Qwen3.8
-systemd memory policy.
+and memory-tier settings still apply. Qwen3.6 foreground launchers run directly,
+without a systemd service or the Qwen3.8 memory policy.
+
+### Detached serving
+
+All `qwen36` and `qwen38` serving apps, including `-aio` and `-aio-mm`, accept
+`start`, `stop`, `status`, and `logs` as their first argument. No subcommand keeps
+the existing foreground behavior. Use `start` instead of appending `&`:
+
+```sh
+nix run .#qwen38 -- start
+nix run .#qwen38 -- status
+nix run .#qwen38 -- logs
+nix run .#qwen38 -- stop
+```
+
+Pass model paths and serving options after `start`, in their usual order:
+
+```sh
+nix run .#qwen36 -- start /models/model.gguf --port 8081
+nix run .#qwen38 -- start /models/shard1.gguf /models/prepared --ctx 8192
+nix run .#qwen38-aio-mm -- start --port 8082
+```
+
+`start` builds any required dependencies before starting a detached user service.
+It returns once the process starts, not once the API is ready. Output goes to the
+user journal; Ctrl-C during `logs` stops following logs, not the server. `logs`
+includes earlier runs. `status` shows service state and recent logs without
+probing API readiness. Check the configured health endpoint separately:
+
+```sh
+curl --fail http://127.0.0.1:8080/health
+```
+
+Control commands do not load `.env`, build the engine, or fetch model artifacts.
+Each model family shares one service across its variants: `strata-qwen36.service`
+or `strata-qwen38.service`. Qwen3.8 also shares its unit with the openSUSE launcher.
+Repeated `start` while active reports that it is already running. `stop` waits
+for shutdown and succeeds if already stopped. Use `stop` then `start` to apply
+changed settings. For Qwen3.6, these commands control detached services only;
+stop a direct foreground invocation with Ctrl-C.
+
+Qwen3.6 detached services have no launcher-imposed memory or swap limits.
+Qwen3.8 retains its memory preflight, `MemoryMax`, and `MemorySwapMax=0` in both
+modes. A temporary GC root protects the detached service's launcher, model, and
+projector closure until shutdown. Detached mode does not enable lingering or
+guarantee survival after the last logout, and it does not enable automatic restart.
+
+If an old Qwen3.8 invocation launched with `&` leaves an inactive unit loaded,
+run `jobs -l` in the original shell, then `fg %N` for that suspended launcher.
+Let it exit or press Ctrl-C, then retry. `reset-failed` alone does not release
+its reference. The launcher reports this condition rather than starting a
+second service under a different name.
+
+### Qwen3.8 service policy
 
 Qwen3.8 always sets `MemorySwapMax=0`; there is no `.env` switch to enable
 service swap. Other host processes can still swap under pressure. The transient
 service has a fixed name, so only one `qwen38` launcher can run per user at once.
-In a terminal, a PTY forwards Ctrl-C to the server. Redirected/noninteractive
-runs use pipes instead; stop those explicitly with `systemctl --user stop strata-qwen38`.
+Foreground mode uses a PTY in a terminal to forward Ctrl-C to the server.
+Redirected/noninteractive foreground runs use pipes instead; stop those
+explicitly with `nix run .#qwen38 -- stop`.
 Change settings and restart the launcher to apply them. Edit
 `CMAKE_HIP_ARCHITECTURES` in `flake.nix` and rebuild to target a different GPU;
 GPU architecture and build concurrency are not runtime `.env` options.

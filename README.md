@@ -71,6 +71,10 @@ without re-preparing.
 
 The default context is 8192 tokens. Ctrl-C stops the server when launched in a
 terminal; for redirected runs, stop it with `systemctl --user stop strata-qwen38`.
+For detached serving, use `nix run .#qwen38 -- start` instead of appending `&`.
+The same app accepts `stop`, `status`, and `logs`; these commands also work with
+`qwen36` and both families' AIO variants. See [detached serving](docs/nix-amd.md#detached-serving)
+for lifecycle behavior, readiness checks, and Qwen3.6 differences.
 The transient `strata-qwen38` user service
 limits charged RAM and cache to 48 GiB and disables its swap use. The separate
 40 GiB engine RAM-tier setting is not a total memory limit. Other host processes
@@ -195,7 +199,7 @@ The default development shell and preparation/fetch checks also include Python. 
 - [CMakeLists.txt](CMakeLists.txt): guard absent optional HIP sources and link strata-poly's HIP MMQ target to hipBLAS.
 - [GPU parity diagnostic](src/kernels/native_expert_parity.cpp): report FP16 signed-zero differences separately from weight mismatches.
 - [.gitignore](.gitignore): ignore local `.env` and Nix result links.
-- [README.md](README.md): document this fork's AMD/Nix workflows and tested scope.
+- [README.md](README.md): document this fork's AMD/Nix workflows, serving lifecycle, and tested scope.
 
 
 

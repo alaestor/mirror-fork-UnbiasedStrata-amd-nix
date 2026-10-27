@@ -19,6 +19,23 @@
         let
           rocm = pkgs.rocmPackages;
           launcherCommon = ./nix/launcher-common.sh;
+          serviceCommon = ./nix/service-launcher.sh;
+          mkServiceLauncher =
+            modelName: variant:
+            pkgs.writeShellApplication {
+              name = "strata-${variant}";
+              runtimeInputs = [
+                pkgs.nix
+                pkgs.systemd
+              ];
+              extraShellCheckFlags = [ "-x" ];
+              text = ''
+                source ${serviceCommon}
+                strata_service_dispatch strata-${modelName}.service \
+                  ${if modelName == "qwen38" then "true" else "false"} \
+                  ${inputs.self}#legacyPackages.${system}.${variant} "$@"
+              '';
+            };
           source = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
@@ -113,6 +130,7 @@
             pkgs.writeShellApplication {
               inherit name;
               text = ''
+                export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
                 exec ${program} --mmproj ${pkgs.lib.escapeShellArg "${projector}"} "$@"
               '';
             };
@@ -120,15 +138,7 @@
           serveQwen38AioMm =
             mkAioMm "strata-qwen38-aio-mm" "${serveQwen38Aio}/bin/strata-qwen38-aio"
               qwen38Projector;
-          mkMmLauncher =
-            modelName:
-            pkgs.writeShellApplication {
-              name = "strata-${modelName}-aio-mm";
-              runtimeInputs = [ pkgs.nix ];
-              text = ''
-                exec nix run ${inputs.self}#legacyPackages.${system}.${modelName}-aio-mm -- "$@"
-              '';
-            };
+          mkMmLauncher = modelName: mkServiceLauncher modelName "${modelName}-aio-mm";
           aioMmLauncher = mkMmLauncher "qwen36";
           qwen38AioMmLauncher = mkMmLauncher "qwen38";
           # Only explicit AIO outputs evaluate model downloads. LFS payloads
@@ -186,17 +196,14 @@
           serveQwen38Aio = pkgs.writeShellApplication {
             name = "strata-qwen38-aio";
             text = ''
+              export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               exec ${serveQwen38}/bin/strata-qwen38 \
                 ${qwen38Model}/IQ3_XXS/${qwen38Shard1} ${qwen38ModelPack} "$@"
             '';
           };
-          qwen38AioLauncher = pkgs.writeShellApplication {
-            name = "strata-qwen38-aio";
-            runtimeInputs = [ pkgs.nix ];
-            text = ''
-              exec nix run ${inputs.self}#legacyPackages.${system}.qwen38-aio -- "$@"
-            '';
-          };
+          qwen38AioLauncher = mkServiceLauncher "qwen38" "qwen38-aio";
+          qwen38Launcher = mkServiceLauncher "qwen38" "qwen38";
+          localLauncher = mkServiceLauncher "qwen36" "qwen36";
           python = pkgs.python3.withPackages (ps: [
             ps.numpy
             ps.regex
@@ -205,30 +212,35 @@
           ]);
           serveAio = pkgs.writeShellApplication {
             name = "strata-qwen36-aio";
+            runtimeInputs = [
+              pkgs.systemd
+              pkgs.nix
+            ];
             extraShellCheckFlags = [ "-x" ];
             text = ''
+              export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
+              source ${serviceCommon}
               load_strata_env
               strata_configure_args "$@"
-              exec ${strata}/bin/unbiased-strata \
+              strata_service_or_exec strata-qwen36.service ${strata}/bin/unbiased-strata \
                 --engine strata-poly --model ${model}/${modelFile} \
                 "''${strata_server_args[@]}" -- --model ${model}/${modelFile} "''${strata_engine_args[@]}"
             '';
           };
-          aioLauncher = pkgs.writeShellApplication {
-            name = "strata-qwen36-aio";
-            runtimeInputs = [ pkgs.nix ];
-            # Defer nix-hug evaluation until explicitly RUNNING the AIO app.
-            # Ordinary flake checks and package builds must not fetch 23 GB.
-            text = ''
-              exec nix run ${inputs.self}#legacyPackages.${system}.qwen36-aio -- "$@"
-            '';
-          };
+          # Defer engine/model evaluation until serving, including for controls.
+          aioLauncher = mkServiceLauncher "qwen36" "qwen36-aio";
           serveLocal = pkgs.writeShellApplication {
             name = "strata-qwen36";
+            runtimeInputs = [
+              pkgs.systemd
+              pkgs.nix
+            ];
             extraShellCheckFlags = [ "-x" ];
             text = ''
+              export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
+              source ${serviceCommon}
               load_strata_env
               if [ "$#" -ge 1 ] && [[ "$1" != -* ]]; then
                 STRATA_MODEL=$1
@@ -239,7 +251,7 @@
                 exit 2
               fi
               strata_configure_args "$@"
-              exec ${strata}/bin/unbiased-strata --engine strata-poly --model "$STRATA_MODEL" \
+              strata_service_or_exec strata-qwen36.service ${strata}/bin/unbiased-strata --engine strata-poly --model "$STRATA_MODEL" \
                 "''${strata_server_args[@]}" -- --model "$STRATA_MODEL" "''${strata_engine_args[@]}"
             '';
           };
@@ -288,9 +300,14 @@
           serveQwen38 = pkgs.writeShellApplication {
             name = "strata-qwen38";
             extraShellCheckFlags = [ "-x" ];
-            runtimeInputs = [ pkgs.systemd ];
+            runtimeInputs = [
+              pkgs.systemd
+              pkgs.nix
+            ];
             text = ''
+              export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
+              source ${serviceCommon}
               load_qwen38_env
               if [ "$#" -ge 2 ] && [[ "$1" != -* ]]; then
                 STRATA_MODEL=$1
@@ -302,10 +319,7 @@
                 exit 2
               fi
               strata_configure_args "$@"
-              # Use a PTY in terminals so Ctrl-C reaches the service; otherwise
-              # retain pipe mode for redirected/noninteractive invocations.
-              exec systemd-run --user --wait --pty --pipe --collect --quiet \
-                --unit=strata-qwen38 --working-directory="$PWD" \
+              strata_service_run strata-qwen38.service \
                 -p "MemoryMax=''${STRATA_QWEN38_MEMORY_MAX:-48G}" -p MemorySwapMax=0 \
                 ${pkgs.bash}/bin/bash ${./nix/memory-preflight.sh} \
                 ${strata}/bin/unbiased-strata --engine strata --model "$STRATA_MODEL" \
@@ -332,11 +346,11 @@
           packages = {
             default = strata;
             inherit strata;
-            qwen36 = serveLocal;
+            qwen36 = localLauncher;
             qwen36-aio = aioLauncher;
             qwen36-aio-mm = aioMmLauncher;
             prepare-qwen38 = prepareQwen38;
-            qwen38 = serveQwen38;
+            qwen38 = qwen38Launcher;
             qwen38-aio = qwen38AioLauncher;
             qwen38-aio-mm = qwen38AioMmLauncher;
           };
@@ -358,7 +372,7 @@
           };
           apps.qwen38 = {
             type = "app";
-            program = "${serveQwen38}/bin/strata-qwen38";
+            program = "${qwen38Launcher}/bin/strata-qwen38";
           };
           apps.default = {
             type = "app";
@@ -366,7 +380,7 @@
           };
           apps.qwen36 = {
             type = "app";
-            program = "${serveLocal}/bin/strata-qwen36";
+            program = "${localLauncher}/bin/strata-qwen36";
           };
           apps.qwen36-aio = {
             type = "app";
@@ -374,6 +388,8 @@
           };
           legacyPackages = {
             inherit model;
+            qwen36 = serveLocal;
+            qwen38 = serveQwen38;
             qwen36-aio = serveAio;
             qwen36-mmproj = qwen36Projector;
             qwen36-aio-mm = serveAioMm;
@@ -423,6 +439,18 @@
               ''
                 bash ${./nix/launcher-common-test.sh} ${launcherCommon}
                 bash ${./nix/memory-preflight-test.sh} ${./nix/memory-preflight.sh}
+                touch "$out"
+              '';
+          checks.service-launcher =
+            pkgs.runCommand "strata-service-launcher-tests"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.gnugrep
+                ];
+              }
+              ''
+                bash ${./nix/service-launcher-test.sh} ${serviceCommon}
                 touch "$out"
               '';
           checks.aio-mm =
