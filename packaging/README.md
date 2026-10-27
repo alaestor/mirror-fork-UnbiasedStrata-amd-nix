@@ -213,7 +213,49 @@ for pair in q4_K/q5_1 q5_K/q5_1 q6_K/q5_1; do
 done
 ```
 
-Resolve any diagnostic failure before launching. With the default paths:
+Resolve any diagnostic failure before launching. From the repository root, use
+the launcher to load your trusted `.env` and run in the foreground:
+
+```sh
+bash packaging/run-qwen38-opensuse.sh
+```
+
+Ctrl-C stops the foreground server. Do not append `&`; use `start` for a
+detached service instead:
+
+```sh
+bash packaging/run-qwen38-opensuse.sh start
+bash packaging/run-qwen38-opensuse.sh status
+bash packaging/run-qwen38-opensuse.sh logs
+bash packaging/run-qwen38-opensuse.sh stop
+```
+
+`start` returns after systemd starts the process, not after model loading or API
+readiness. It keeps the same memory limits as the foreground launcher, disconnects
+standard input, and sends output to the user journal. Ctrl-C during `logs` stops
+following the journal without stopping the server. `status` shows service state
+and recent logs; it does not probe API readiness. Use the health request below.
+`logs` includes previous runs of this unit.
+
+Only one instance runs per user. The `strata-qwen38.service` name is shared with
+the Nix Qwen3.8 launcher, so these commands also control an instance started
+through Nix. Repeating `start` while active reports that it is already running;
+`stop` waits for shutdown and succeeds if already stopped.
+Use `stop` followed by `start` to apply changed settings. Control commands do not
+load `.env` or require the model, prepared packs, or build artifacts, and can run
+from another directory when invoked with the script's full path. Run all commands
+as the same user, without `sudo`.
+
+If an earlier launch with `&` leaves the unit loaded after stopping the server,
+run `jobs -l` in the original shell. Use `fg %N` for the suspended launcher job,
+then let it exit or press Ctrl-C before retrying. `reset-failed` alone does not
+release a reference held by a suspended launcher. Do not delete the transient
+unit file or switch to unique names to bypass this condition.
+
+A detached service does not guarantee survival after the last logout. See
+[Headless and SSH sessions](#headless-and-ssh-sessions) for user-manager lifetime.
+
+For a manual foreground launch with the default paths:
 
 ```sh
 systemd-run --user --wait --pty --collect \
