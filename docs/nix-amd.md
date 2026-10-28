@@ -62,8 +62,21 @@ Qwen3.6 needs no preparation. Flash-Next
 still requires preparation as described below. Neither local workflow downloads
 model artifacts; Nix still fetches pinned build dependencies.
 
-Launchers read `.env` in the current directory. Use `STRATA_ENV_FILE=/path/to/file`
-to select another file. It is trusted shell configuration, not an untrusted data
+Launchers read `.env` in the current directory. Use `--env-file PATH` or
+`--env-file=PATH` to select another file, overriding `STRATA_ENV_FILE`.
+Place it after any lifecycle action and before the engine's `--` separator:
+
+```sh
+nix run .#prepare-qwen38 -- --env-file .env-38-iq3s-swift-low
+nix run .#qwen38 -- start --env-file .env-38-iq3s-swift-low
+```
+
+Selecting a configuration does not create a separate service. Stop the running
+model before starting another configuration. Low/high presets for the same
+weights can share prepared packs; different weights need separate preparation
+directories.
+
+The selected file is trusted shell configuration, not an untrusted data
 file. `.env` is Git-ignored; `.env.template` is explicitly included.
 The template lists context, threading, address, KV type, and memory-cap settings.
 The new engines do not accept the former VRAM/RAM cap settings. Remove

@@ -221,6 +221,8 @@
               export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
               source ${serviceCommon}
+              strata_parse_env_args "$@"
+              set -- "''${strata_launch_args[@]}"
               load_strata_env
               strata_configure_args "$@"
               strata_service_or_exec strata-qwen36.service ${strata}/bin/unbiased-strata \
@@ -241,6 +243,8 @@
               export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
               source ${serviceCommon}
+              strata_parse_env_args "$@"
+              set -- "''${strata_launch_args[@]}"
               load_strata_env
               if [ "$#" -ge 1 ] && [[ "$1" != -* ]]; then
                 STRATA_MODEL=$1
@@ -264,6 +268,8 @@
             ];
             text = ''
               source ${launcherCommon}
+              strata_parse_env_args "$@"
+              set -- "''${strata_launch_args[@]}"
               load_qwen38_env
               if [ "$#" -eq 2 ]; then
                 STRATA_MODEL=$1
@@ -281,7 +287,7 @@
               model=$(realpath -- "$STRATA_MODEL")
               suffix=-00001-of-00002.gguf
               if [[ "$model" != *"$suffix" ]]; then
-                echo "Expected the first IQ3_XXS shard" >&2
+                echo "Expected the first of two GGUF shards" >&2
                 exit 2
               fi
               shard2="''${model%"$suffix"}-00002-of-00002.gguf"
@@ -308,6 +314,8 @@
               export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               source ${launcherCommon}
               source ${serviceCommon}
+              strata_parse_env_args "$@"
+              set -- "''${strata_launch_args[@]}"
               load_qwen38_env
               if [ "$#" -ge 2 ] && [[ "$1" != -* ]]; then
                 STRATA_MODEL=$1
@@ -462,6 +470,8 @@
                   extraShellCheckFlags = [ "-x" ];
                   text = ''
                     source ${launcherCommon}
+                    strata_parse_env_args "$@"
+                    set -- "''${strata_launch_args[@]}"
                     ${loader}
                     strata_configure_args "$@"
                     printf '%s\n' "''${strata_server_args[@]}" ENGINE "''${strata_engine_args[@]}"

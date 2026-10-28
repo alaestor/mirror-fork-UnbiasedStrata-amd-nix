@@ -1,5 +1,34 @@
 # shellcheck shell=bash
 # Shared by the packaged launchers. .env is trusted shell configuration.
+strata_parse_env_args() {
+  strata_launch_args=()
+  while (( $# )); do
+    case $1 in
+      --env-file)
+        if (( $# < 2 )) || [[ -z $2 || $2 == -* ]]; then
+          echo '--env-file requires a nonempty path.' >&2
+          return 2
+        fi
+        STRATA_ENV_FILE=$2
+        shift 2
+        ;;
+      --env-file=*)
+        STRATA_ENV_FILE=${1#*=}
+        if [[ -z $STRATA_ENV_FILE ]]; then
+          echo '--env-file requires a nonempty path.' >&2
+          return 2
+        fi
+        shift
+        ;;
+      --)
+        strata_launch_args+=("$@")
+        break
+        ;;
+      *) strata_launch_args+=("$1"); shift ;;
+    esac
+  done
+}
+
 load_strata_env() {
   local env_file=${STRATA_ENV_FILE:-.env}
   if [[ -f "$env_file" ]]; then

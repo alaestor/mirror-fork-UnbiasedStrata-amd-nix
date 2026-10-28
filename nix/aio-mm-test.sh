@@ -22,5 +22,10 @@ for model in qwen36 qwen38; do
   joined=" ${args[*]} "
   [[ $joined == *' --mmproj /override/custom BF16.gguf --image-max-tokens 256 '* ]]
   [[ $joined == *' --lookup 0 ' ]]
+  # Wrappers prepend projector flags; config selection must still reach the loader.
+  printf 'STRATA_PORT=8129\n' > "$work/alternate config.env"
+  mapfile -t args < <("$wrapper" --env-file "$work/alternate config.env")
+  joined=" ${args[*]} "
+  [[ $joined == *' --port 8129 '* && $joined != *--env-file* ]]
 done
 echo 'PASS: bundled projectors, CLI precedence, engine arguments'

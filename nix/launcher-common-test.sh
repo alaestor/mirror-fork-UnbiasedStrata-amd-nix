@@ -73,4 +73,31 @@ echo 'STRATA_TEMPERATURE=' >> "$STRATA_ENV_FILE"
 load_strata_env
 strata_configure_sampling
 [[ ${strata_sampling_args[*]} != *--temp* ]]
-echo 'PASS: engine routing, images, sampling overrides, unsupported caps, missing values/config'
+# CLI config selection overrides the environment and preserves remaining arguments.
+cat > "$work/alternate config.env" <<'CONFIG'
+STRATA_QWEN38_MODEL='/models/alternate flash.gguf'
+STRATA_QWEN38_CTX=2048
+CONFIG
+strata_parse_env_args '/models/explicit model.gguf' --env-file "$work/alternate config.env" '/packs/explicit pack' --ctx 1024 -- --env-file engine-value
+[[ $STRATA_ENV_FILE == "$work/alternate config.env" ]]
+[[ ${#strata_launch_args[@]} == 7 ]]
+[[ ${strata_launch_args[0]} == '/models/explicit model.gguf' && ${strata_launch_args[1]} == '/packs/explicit pack' ]]
+[[ ${strata_launch_args[5]} == --env-file && ${strata_launch_args[6]} == engine-value ]]
+load_qwen38_env
+[[ $STRATA_MODEL == '/models/alternate flash.gguf' && $STRATA_CTX == 2048 ]]
+strata_parse_env_args --env-file="$work/config.env" --temp 0.6
+[[ $STRATA_ENV_FILE == "$work/config.env" && ${strata_launch_args[*]} == '--temp 0.6' ]]
+for form in missing empty equals option; do
+  case $form in
+    missing) args=(--env-file) ;;
+    empty) args=(--env-file '') ;;
+    equals) args=(--env-file=) ;;
+    option) args=(--env-file --temp 0.6) ;;
+  esac
+  if strata_parse_env_args "${args[@]}" 2>/dev/null; then
+    echo "invalid env-file form accepted: $form" >&2; exit 1
+  fi
+done
+strata_parse_env_args --env-file "$work/missing.env"
+if load_strata_env 2>/dev/null; then echo 'missing CLI config accepted' >&2; exit 1; fi
+echo 'PASS: engine routing, images, sampling, config selection, invalid values/config'

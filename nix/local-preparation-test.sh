@@ -25,4 +25,15 @@ export STRATA_QWEN38_MTP_SOURCE="$work/absent draft source"
 expect_failure "$prepare38" '/missing/local shard.gguf' "$work/output"
 grep -q 'mtp-manifest.json' stderr
 [[ ! -e $STRATA_QWEN38_MTP_SOURCE && ! -e $work/output ]]
+# The explicit config is selected before validating positional preparation inputs.
+cat > 'alternate config.env' <<'CONFIG'
+STRATA_QWEN38_MODEL='/missing/alternate shard.gguf'
+STRATA_QWEN38_MTP_SOURCE='/missing/alternate draft'
+CONFIG
+expect_failure "$prepare38" --env-file "$work/alternate config.env"
+grep -q '/missing/alternate draft' stderr
+expect_failure "$prepare38" --env-file
+grep -q -- '--env-file requires' stderr
+expect_failure "$prepare38" --env-file "$work/missing.env"
+grep -q 'Configuration file does not exist' stderr
 echo 'PASS: local preparation requires explicit inputs and never acquires missing artifacts'
