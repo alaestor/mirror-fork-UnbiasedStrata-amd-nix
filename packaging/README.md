@@ -116,6 +116,18 @@ Per-request settings take precedence. See [sampling defaults](../docs/nix-amd.md
 for the presets, thinking-mode selection, and request fields. Rebuild the API
 server to get this policy, then restart it after changing `.env`.
 
+The model-card defaults may be slower. To restore the previous llama.cpp
+defaults, add these overrides to `.env` and restart the server:
+
+```sh
+STRATA_TEMPERATURE=0.8
+STRATA_TOP_P=0.95
+STRATA_TOP_K=40
+STRATA_MIN_P=0.05
+STRATA_PRESENCE_PENALTY=0
+STRATA_REPEAT_PENALTY=1
+```
+
 ### Headless and SSH sessions
 
 The launcher requires a systemd user manager, but no desktop or lingering.

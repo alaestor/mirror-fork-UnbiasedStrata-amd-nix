@@ -92,6 +92,21 @@ systemctl --user stop strata-qwen38
 
 ### Configuration and API
 
+Qwen3.8 now uses [model-card sampling defaults](docs/nix-amd.md#sampling-defaults),
+which may be slower than the previous llama.cpp defaults. To restore the old
+values, put these overrides in `.env` and restart the server:
+
+```sh
+STRATA_TEMPERATURE=0.8
+STRATA_TOP_P=0.95
+STRATA_TOP_K=40
+STRATA_MIN_P=0.05
+STRATA_PRESENCE_PENALTY=0
+STRATA_REPEAT_PENALTY=1
+```
+
+Per-request sampling settings still take precedence.
+
 The [configuration reference](docs/nix-amd.md#configuration-reference) covers
 every variable, default, unit, and override rule. CLI options override generated
 defaults; engine options go after a second `--`:
@@ -203,7 +218,7 @@ The default development shell and preparation/fetch checks also include Python. 
 - [Fake engine](frontend/tests/fake-engine.py): capture engine requests for sampling regression tests.
 - [GPU parity diagnostic](src/kernels/native_expert_parity.cpp): report FP16 signed-zero differences separately from weight mismatches.
 - [.gitignore](.gitignore): ignore local `.env` and Nix result links.
-- [README.md](README.md): document this fork's AMD/Nix workflows, serving lifecycle, and tested scope.
+- [README.md](README.md): document this fork's AMD/Nix workflows, serving lifecycle, sampling overrides, and tested scope.
 
 
 
