@@ -114,16 +114,16 @@
           };
           modelFile = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf";
           modelRevision = "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d";
-          qwen38Revision = "ed59f92082b1e93c0e96d60a8b11aab089b52f09";
+          qwen38Revision = "99bb8f7f95c7aa7b24a36a7786a4f657b30f5d3d";
           qwen36Projector = pkgs.fetchurl {
             name = "Qwen3.6-35B-A3B-vision-mmproj-BF16.gguf";
             url = "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/${modelRevision}/mmproj-BF16.gguf";
             sha256 = "da63cb47a76763c712393f8a017070188a304fa39f8aeea6edc629ed7b975cfa";
           };
           qwen38Projector = pkgs.fetchurl {
-            name = "Qwen3.8-Flash-Next-vision-mmproj-BF16.gguf";
-            url = "https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF/resolve/${qwen38Revision}/mmproj-Qwen3.8-Flash-Next-BF16.gguf";
-            sha256 = "b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0";
+            name = "Swift-Qwen3.8-Flash-Next-vision-mmproj-BF16.gguf";
+            url = "https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF/resolve/${qwen38Revision}/mmproj-Swift-Qwen3.8-Flash-Next-BF16.gguf";
+            sha256 = "cd1140f4abba943ce8d9fa92fed8407e389954d26907efde7b72153c75bd8a60";
           };
           mkAioMm =
             name: program: projector:
@@ -150,16 +150,16 @@
             filters.files = [ modelFile ];
             fileTreeHash = "sha256-8gC7LFtwlOU5egKZd0KLhWskeezaMXgUJO0nJM5mSNQ=";
           };
-          qwen38Shard1 = "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf";
-          qwen38Shard2 = "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf";
+          qwen38Shard1 = "Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf";
+          qwen38Shard2 = "Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf";
           qwen38Model = nixHug.fetchModel {
-            url = "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF";
+            url = "ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF";
             rev = qwen38Revision;
             filters.files = [
-              "IQ3_XXS/${qwen38Shard1}"
-              "IQ3_XXS/${qwen38Shard2}"
+              qwen38Shard1
+              qwen38Shard2
             ];
-            fileTreeHash = "sha256-JaZvPIZPT337F//3Y+ThQmZOH3sXDGT7kPb/8BxgHnI=";
+            fileTreeHash = "sha256-fXSyYu0lpaujpiqG23sMGIbCZsSGfyshk957Uuqp2jc=";
           };
           # Network access is confined to this fixed-output AIO dependency.
           qwen38MtpSource =
@@ -179,13 +179,13 @@
                 cp fetched/tensors/*.bin "$out/tensors/"
               '';
           qwen38ModelPack =
-            pkgs.runCommand "qwen38-iq3-xxs-pack"
+            pkgs.runCommand "qwen38-swift-iq3-s-pack"
               {
                 nativeBuildInputs = [ python ];
                 STRATA_GGUF_PY = "${llamaSource}/gguf-py";
               }
               ''
-                python ${packSource}/tools/iq_pack.py --gguf ${qwen38Model}/IQ3_XXS/${qwen38Shard1} \
+                python ${packSource}/tools/iq_pack.py --gguf ${qwen38Model}/${qwen38Shard1} \
                   --out "$out/pack"
                 cp ${./data/expert-profile.bin} "$out/pack/expert-profile.bin"
                 python ${packSource}/tools/mtp_pack.py --src ${qwen38MtpSource} \
@@ -198,7 +198,7 @@
             text = ''
               export STRATA_SERVICE_ROOT="''${STRATA_SERVICE_ROOT:-''${0%/bin/*}}"
               exec ${serveQwen38}/bin/strata-qwen38 \
-                ${qwen38Model}/IQ3_XXS/${qwen38Shard1} ${qwen38ModelPack} "$@"
+                ${qwen38Model}/${qwen38Shard1} ${qwen38ModelPack} "$@"
             '';
           };
           qwen38AioLauncher = mkServiceLauncher "qwen38" "qwen38-aio";

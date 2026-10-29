@@ -140,7 +140,9 @@ nix run .#qwen38-aio-mm
 ```
 
 Only `-aio` and `-aio-mm` launchers automatically download model artifacts.
-They use nix-hug for pinned GGUFs. Qwen3.8 prepares packs in the Nix store and fetches the
+They use nix-hug for pinned GGUFs. Qwen3.8 AIO uses [Swift 1.5 IQ3_S](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF/tree/99bb8f7f95c7aa7b24a36a7786a4f657b30f5d3d),
+with the matching Swift BF16 projector in `qwen38-aio-mm`. Local-weight defaults remain unchanged.
+Qwen3.8 prepares packs in the Nix store and fetches the
 pinned MTP tensors through a fixed-output derivation and keeps the same RAM,
 swap, and GPU-reserve policy as the local launcher. Both ignore configured local
 model and pack paths; other runtime settings still apply.
