@@ -60,8 +60,8 @@
           llamaSource = pkgs.fetchFromGitHub {
             owner = "robertkarl";
             repo = "llama.cpp";
-            rev = "385445fad49e42fa718b5e1f71668f35b7a08559";
-            hash = "sha256-U9xYwlyzNACah+wOnTfmU20leV0lnsWZgejGoBluYOQ=";
+            rev = "44072a19fb94d0bed63d381d42f6237373f91d54";
+            hash = "sha256-dMGOaTb6D3PTwVoeU4Yz72quMtJRhuxONF+8kZuOfpQ=";
           };
           strata = pkgs.stdenv.mkDerivation {
             pname = "unbiased-strata-hip";
