@@ -13,6 +13,7 @@ result, not a controlled benchmark or a guarantee for other settings.
 The intended host is openSUSE Tumbleweed with an AVX2 CPU and an RX 9070 XT.
 The AMD kernel driver must expose `/dev/kfd` and a GPU render node to your user.
 Python 3.11 or newer is required for preparation.
+CMake 3.24 or newer is required for the build and cache-reset option.
 
 Install the build dependencies, reviewing the proposed transaction first:
 
@@ -24,8 +25,9 @@ sudo zypper install --dry-run \
 ```
 
 Repeat the install without `--dry-run` if the transaction is acceptable. The
-script also needs `flock` and `sha256sum`, normally supplied by util-linux and
-coreutils. Python must support `python3 -m venv` and pip inside that environment.
+script also needs `flock`, `sha256sum`, `stat`, and `realpath`, normally supplied
+by util-linux and coreutils. Python must support `python3 -m venv` and pip inside
+that environment.
 
 Network access is required for llama.cpp, Python dependencies, and the pinned
 MTP tensors. Preparation uses CPU and disk, not the GPU. Allow substantial free
@@ -206,18 +208,50 @@ Keep the original GGUF shards in place. The prepared model pack still uses them.
 
 ## Reruns and failures
 
+To rebuild just the engines and server, without checking or regenerating packs:
+
+```sh
+bash packaging/build-qwen38-opensuse.sh --build-only
+```
+
+This mode does not require model files or Python preparation dependencies.
+Existing packs remain untouched, even if their preparation markers are old.
+It does not certify that a pack is compatible with a different model or engine.
+
+If you moved the checkout and CMake reports that its cached source or build
+directory differs, reset the CMake cache while rebuilding:
+
+```sh
+bash packaging/build-qwen38-opensuse.sh --fresh --build-only
+```
+
+`--fresh` passes CMake's cache-reset option. It keeps model files, packs, and
+other build outputs; it does not delete the build directory. Omit `--build-only`
+to also run preparation. Plain `make clean` targets `build/`, not this helper's
+default `build-gfx1201/`, and never cleans packs. Neither command is needed for
+ordinary incremental rebuilds.
+
 Rerunning the same command performs an incremental build, checks Python
 dependencies, and verifies downloaded MTP tensors. Valid
 MTP inputs do not need another download. Completed preparation stages are
-skipped using completion markers tied to the tools, pinned source, and model
-location. The markers do not verify model contents or every prepared output.
-If you replace a model at the same path, use a fresh `PREPARED_DIR`.
-Removing model hashes changes existing completion fingerprints; use a fresh
-`PREPARED_DIR` if an older pack is reported as stale.
+skipped using separate completion markers for the model and MTP packs. Only
+their respective preparation tools, supporting data, and llama.cpp's `gguf-py`
+tree affect those markers. Unrelated tool edits and engine-only changes do not
+invalidate them. Model packs also track the conversion setting and each shard's
+checkout-relative path, size, and modification time. Moving the whole checkout
+with those paths and timestamps preserved no longer invalidates the markers.
 
-If the source or model location changes, the script refuses stale packs rather
-than overwriting them. Set `PREPARED_DIR` to a fresh directory and rerun. Use a
-fresh directory for damaged packs too.
+These are reuse checks, not full integrity checks. They do not hash model
+contents or verify every prepared output. If you replace model contents while
+preserving size and modification time, use a fresh `PREPARED_DIR`.
+
+If preparation inputs change, a pack is damaged, or an older marker is
+unrecognized, the helper never deletes or overwrites the existing pack. Use
+`--build-only` if you only need updated binaries. To regenerate packs, set
+`PREPARED_DIR` in `.env` to a fresh directory and rerun without `--build-only`.
+Markers from the previous combined-fingerprint scheme are not automatically
+trusted or upgraded. An unrecognized marker alone does not establish that the
+pack is unusable.
 
 Failed preparation stages leave hidden temporary directories beneath
 `PREPARED_DIR` for inspection. Reruns create a new temporary directory; they do
