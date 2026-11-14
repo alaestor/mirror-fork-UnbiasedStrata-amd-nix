@@ -45,10 +45,9 @@ for command in git cmake ninja flock; do
 done
 if (( ! build_only )); then
   [[ "$COMPAT_BF16" == 0 || "$COMPAT_BF16" == 1 ]] || die 'COMPAT_BF16 must be 0 or 1.'
-  for command in python3 sha256sum stat realpath; do
+  for command in sha256sum stat realpath; do
     command -v "$command" >/dev/null || die "Missing command: $command"
   done
-  python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
 fi
 mkdir -p "$BUILD_DIR"
 exec 9>"$BUILD_DIR/native-preparation.lock"
@@ -80,9 +79,16 @@ cmake --build "$BUILD_DIR" --target unbiased-strata strata strata-poly strata-de
 echo "Build complete: $BUILD_DIR. Existing packs have not been changed."
 if (( build_only )); then exit 0; fi
 
-if [[ ! -x "$VENV/bin/python" ]]; then python3 -m venv "$VENV"; fi
-PYTHON="$PWD/$VENV/bin/python"
-"$PYTHON" -m pip install 'numpy>=2.2.6' regex pyyaml tqdm requests
+python_ready=0
+prepare_python() {
+  if (( python_ready )); then return; fi
+  command -v python3 >/dev/null || die 'Missing command: python3 (needed to prepare missing packs)'
+  python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
+  if [[ ! -x "$VENV/bin/python" ]]; then python3 -m venv "$VENV"; fi
+  PYTHON="$PWD/$VENV/bin/python"
+  "$PYTHON" -m pip install 'numpy>=2.2.6' regex pyyaml tqdm requests
+  python_ready=1
+}
 export STRATA_GGUF_PY="$PWD/third_party/llama.cpp/gguf-py"
 
 # Fingerprint only each stage's inputs. Model metadata avoids rereading huge
@@ -106,16 +112,39 @@ mtp_fingerprint=$(
       data/draft_vocab.bin nix/qwen38-mtp-manifest.json;
   } | sha256sum
 )
+reused_unverified=0
 stage() {
-  local name=$1 fingerprint=$2 target="$PREPARED_DIR/$1" temporary
+  local name=$1 fingerprint=$2 target="$PREPARED_DIR/$1" temporary required
+  local -a required_files
   shift 2
   if [[ -e "$target" ]]; then
-    [[ -f "$target/.native-preparation" ]] &&
-      [[ $(cat "$target/.native-preparation") == "$fingerprint" ]] ||
-      die "Preparation inputs changed or completion marker is unrecognized: $target. Existing packs were kept. Use --build-only to rebuild engines without preparing packs, or set PREPARED_DIR in .env to a fresh directory to regenerate."
-    echo "Already prepared: $target"
+    case "$name" in
+      pack) required_files=(dense.bin index.txt native_experts.txt expert-profile.bin) ;;
+      mtp) required_files=(dense.bin dense.txt experts.bin draft_vocab.bin) ;;
+    esac
+    for required in "${required_files[@]}"; do
+      [[ -f "$target/$required" && -s "$target/$required" ]] || die "Prepared output missing or empty: $target/$required. Existing files were kept. Set PREPARED_DIR in .env to a fresh directory and rerun to regenerate, or use --build-only to compile without preparation checks."
+    done
+    if [[ -f "$target/.native-preparation" ]] &&
+       [[ $(cat "$target/.native-preparation") == "$fingerprint" ]]; then
+      echo "Already prepared: $target"
+    else
+      reused_unverified=1
+      cat >&2 <<EOF
+
+WARNING: Reusing existing prepared files: $target
+Preparation inputs changed, or the completion marker is missing or unrecognized.
+This does not prove the pack is broken, but compatibility is not verified and
+problems may only appear at runtime. Files and completion markers were kept unchanged.
+If loading or inference fails, set PREPARED_DIR in .env to a fresh directory and
+rerun this script to regenerate packs from your model files. Keep the originals
+until the new packs work; do not delete model weights or raw MTP inputs.
+
+EOF
+    fi
     return
   fi
+  prepare_python
   temporary=$(mktemp -d "$PREPARED_DIR/.${name}.XXXXXXXX")
   "$@" "$temporary"
   printf '%s\n' "$fingerprint" > "$temporary/.native-preparation"
@@ -128,14 +157,17 @@ pack_model() {
   cp data/expert-profile.bin "$1/expert-profile.bin"
 }
 pack_mtp() {
+  if ! "$PYTHON" nix/verify-mtp-source.py "$MTP_SOURCE" nix/qwen38-mtp-manifest.json; then
+    "$PYTHON" nix/mtp-fetch-pinned.py "$PWD/tools" fetch --out "$MTP_SOURCE"
+    "$PYTHON" nix/verify-mtp-source.py "$MTP_SOURCE" nix/qwen38-mtp-manifest.json
+  fi
   "$PYTHON" tools/mtp_pack.py --src "$MTP_SOURCE" --experts q2_0 --out "$1/mtp-q2_0.gguf"
   "$PYTHON" tools/mtp_rt.py --gguf "$1/mtp-q2_0.gguf" --out "$1"
   cp data/draft_vocab.bin "$1/draft_vocab.bin"
 }
 stage pack "$pack_fingerprint" pack_model
-if ! "$PYTHON" nix/verify-mtp-source.py "$MTP_SOURCE" nix/qwen38-mtp-manifest.json; then
-  "$PYTHON" nix/mtp-fetch-pinned.py "$PWD/tools" fetch --out "$MTP_SOURCE"
-  "$PYTHON" nix/verify-mtp-source.py "$MTP_SOURCE" nix/qwen38-mtp-manifest.json
-fi
 stage mtp "$mtp_fingerprint" pack_mtp
-echo "Ready: $BUILD_DIR/unbiased-strata; --pack $PREPARED_DIR/pack --mtp $PREPARED_DIR/mtp"
+if (( reused_unverified )); then
+  echo 'Build/preparation finished with warnings: existing packs were reused; runtime compatibility is not verified.' >&2
+fi
+echo "Launch inputs: $BUILD_DIR/unbiased-strata; --pack $PREPARED_DIR/pack --mtp $PREPARED_DIR/mtp"

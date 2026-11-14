@@ -7,6 +7,7 @@ trap 'rm -r "$work"' EXIT
 mkdir -p "$work/bin" "$work/repo/tools" "$work/repo/data" "$work/repo/nix" \
   "$work/repo/third_party/llama.cpp" "$work/repo/.venv/bin"
 export CALL_LOG="$work/calls" CONFIGURE_EXIT=0 BUILD_EXIT=0 PACK_EXIT=0 GGUF_REV=gguf-tree
+export VERIFY_EXIT=0 FETCH_EXIT=0
 cat > "$work/bin/git" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$*" == *'rev-parse HEAD:gguf-py' ]]; then echo "$GGUF_REV"; fi
@@ -21,8 +22,19 @@ cat > "$work/bin/python3" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALL_LOG"
 case "$1" in
-  tools/iq_pack.py|tools/mtp_pack.py|tools/mtp_rt.py)
-    [[ "$1" != tools/iq_pack.py ]] || { (( PACK_EXIT == 0 )) || exit "$PACK_EXIT"; }
+  nix/verify-mtp-source.py) exit "$VERIFY_EXIT" ;;
+  nix/mtp-fetch-pinned.py) exit "$FETCH_EXIT" ;;
+  tools/iq_pack.py|tools/mtp_rt.py)
+    tool=$1
+    [[ "$tool" != tools/iq_pack.py ]] || { (( PACK_EXIT == 0 )) || exit "$PACK_EXIT"; }
+    while [[ "$1" != --out ]]; do shift; done
+    out=$2
+    mkdir -p "$out"
+    if [[ "$tool" == tools/iq_pack.py ]]; then
+      for file in dense.bin index.txt native_experts.txt; do echo mock > "$out/$file"; done
+    else
+      for file in dense.bin dense.txt experts.bin; do echo mock > "$out/$file"; done
+    fi
     ;;
 esac
 MOCK
@@ -92,13 +104,26 @@ output_has 'Both model shards must exist'
 touch 'model with spaces-00001-of-00002.gguf' 'model with spaces-00002-of-00002.gguf'
 
 # Unrecognized and old completion markers are never silently trusted or removed.
-run 1
-output_has 'completion marker is unrecognized'
-output_has 'Use --build-only'
+for file in dense.bin index.txt native_experts.txt expert-profile.bin; do
+  echo mock > "packs with spaces/pack/$file"
+done
+mkdir -p 'packs with spaces/mtp'
+for file in dense.bin dense.txt experts.bin draft_vocab.bin; do
+  echo mock > "packs with spaces/mtp/$file"
+done
+run 0
+output_has 'WARNING: Reusing existing prepared files: packs with spaces/pack'
+output_has 'runtime compatibility is not verified'
+output_has 'If loading or inference fails'
+[[ ! -s "$CALL_LOG" && ! -e 'packs with spaces/pack/.native-preparation' ]]
 [[ $(cat 'packs with spaces/pack/sentinel') == keep ]]
 echo old-fingerprint > 'packs with spaces/pack/.native-preparation'
-run 1
-output_has 'Existing packs were kept'
+run 0
+output_has 'WARNING: Reusing existing prepared files: packs with spaces/pack'
+[[ ! -s "$CALL_LOG" && $(cat 'packs with spaces/pack/.native-preparation') == old-fingerprint ]]
+# The warning persists; reuse must not bless the old marker with a new fingerprint.
+run 0
+output_has 'WARNING: Reusing existing prepared files: packs with spaces/pack'
 run 0 --build-only
 [[ ! -s "$CALL_LOG" && $(cat 'packs with spaces/pack/.native-preparation') == old-fingerprint ]]
 cat >> .env <<'ENV'
@@ -112,6 +137,8 @@ called tools/mtp_pack.py
 run 0
 not_called tools/iq_pack.py
 not_called tools/mtp_pack.py
+[[ ! -s "$CALL_LOG" ]]
+if output_has 'WARNING:'; then exit 1; fi
 
 # Unrelated tools and engine-only llama.cpp revisions do not invalidate packs.
 echo changed >> tools/unrelated.py
@@ -128,19 +155,25 @@ run 0 --fresh
 not_called tools/iq_pack.py
 not_called tools/mtp_pack.py
 
-# Model-pack changes do not invalidate MTP. Preserve MTP while preparing a new pack.
+# Changed inputs warn and reuse without rewriting markers or downloading inputs.
+pack_marker=$(cat 'new packs/pack/.native-preparation')
+mtp_marker=$(cat 'new packs/mtp/.native-preparation')
 echo changed >> tools/iq_pack.py
-run 1
-output_has 'new packs/pack'
+run 0
+output_has 'WARNING: Reusing existing prepared files: new packs/pack'
+if output_has 'WARNING: Reusing existing prepared files: new packs/mtp'; then exit 1; fi
+[[ ! -s "$CALL_LOG" && $(cat 'new packs/pack/.native-preparation') == "$pack_marker" ]]
 mv 'new packs/pack' 'new packs/saved-pack'
 run 0
 called tools/iq_pack.py
 not_called tools/mtp_pack.py
 
-# MTP-only changes leave the model pack reusable and stop at the affected stage.
+# MTP-only changes warn only for MTP, and leave it untouched until regeneration.
 echo changed >> data/draft_vocab.bin
-run 1
-output_has 'new packs/mtp'
+run 0
+output_has 'WARNING: Reusing existing prepared files: new packs/mtp'
+if output_has 'WARNING: Reusing existing prepared files: new packs/pack'; then exit 1; fi
+[[ ! -s "$CALL_LOG" && $(cat 'new packs/mtp/.native-preparation') == "$mtp_marker" ]]
 not_called tools/iq_pack.py
 mv 'new packs/mtp' 'new packs/saved-mtp'
 run 0
@@ -149,8 +182,9 @@ called tools/mtp_pack.py
 
 # Replacing model contents at the same path is detected without hashing weights.
 echo replacement >> 'model with spaces-00002-of-00002.gguf'
-run 1
-output_has 'new packs/pack'
+run 0
+output_has 'WARNING: Reusing existing prepared files: new packs/pack'
+[[ ! -s "$CALL_LOG" ]]
 mv 'new packs/pack' 'new packs/previous-pack'
 
 # A failed packer never publishes a completion marker or a successful target.
@@ -168,8 +202,9 @@ run 0 --build-only
 run 1
 output_has 'COMPAT_BF16 must be 0 or 1'
 echo COMPAT_BF16=1 >> .env
-run 1
-output_has 'new packs/pack'
+run 0
+output_has 'WARNING: Reusing existing prepared files: new packs/pack'
+[[ ! -s "$CALL_LOG" ]]
 mv 'new packs/pack' 'new packs/pre-conversion-pack'
 run 0
 called --compat-bf16
@@ -177,14 +212,33 @@ not_called tools/mtp_pack.py
 
 # A gguf-py change invalidates both stages, unlike an engine-only revision.
 export GGUF_REV=new-gguf-tree
-run 1
-output_has 'new packs/pack'
+run 0
+output_has 'WARNING: Reusing existing prepared files: new packs/pack'
+output_has 'WARNING: Reusing existing prepared files: new packs/mtp'
+[[ ! -s "$CALL_LOG" ]]
 mv 'new packs/pack' 'new packs/pre-gguf-pack'
-run 1
+run 0
 called tools/iq_pack.py
-output_has 'new packs/mtp'
+output_has 'WARNING: Reusing existing prepared files: new packs/mtp'
 mv 'new packs/mtp' 'new packs/pre-gguf-mtp'
 run 0
 not_called tools/iq_pack.py
 called tools/mtp_pack.py
+# Missing/empty required outputs are actual failures, not uncertain fingerprints.
+mv 'new packs/pack/index.txt' 'new packs/pack/saved-index.txt'
+run 1
+output_has 'Prepared output missing or empty: new packs/pack/index.txt'
+[[ ! -s "$CALL_LOG" && -f 'new packs/pack/saved-index.txt' ]]
+mv 'new packs/pack/saved-index.txt' 'new packs/pack/index.txt'
+: > 'new packs/mtp/dense.txt'
+run 1
+output_has 'Prepared output missing or empty: new packs/mtp/dense.txt'
+[[ ! -s "$CALL_LOG" ]]
+mv 'new packs/mtp' 'new packs/incomplete-mtp'
+
+# MTP acquisition failures still stop preparation without replacing old files.
+export VERIFY_EXIT=1 FETCH_EXIT=8
+run 8
+called nix/mtp-fetch-pinned.py
+[[ ! -e 'new packs/mtp' && -d 'new packs/incomplete-mtp' ]]
 printf '%s\n' 'PASS: openSUSE build recovery and stage-specific preparation'

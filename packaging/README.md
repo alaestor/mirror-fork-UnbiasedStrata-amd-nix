@@ -231,10 +231,13 @@ to also run preparation. Plain `make clean` targets `build/`, not this helper's
 default `build-gfx1201/`, and never cleans packs. Neither command is needed for
 ordinary incremental rebuilds.
 
-Rerunning the same command performs an incremental build, checks Python
-dependencies, and verifies downloaded MTP tensors. Valid
-MTP inputs do not need another download. Completed preparation stages are
-skipped using separate completion markers for the model and MTP packs. Only
+Rerunning the same command performs an incremental build and reuses existing
+packs. Python setup and MTP input verification/acquisition run only when a
+missing preparation stage needs them. Reusing existing packs does not install
+Python dependencies or download raw MTP tensors. The source checkout step can
+still fetch missing llama.cpp sources.
+
+Separate completion markers track the model and MTP packs. Only
 their respective preparation tools, supporting data, and llama.cpp's `gguf-py`
 tree affect those markers. Unrelated tool edits and engine-only changes do not
 invalidate them. Model packs also track the conversion setting and each shard's
@@ -245,13 +248,25 @@ These are reuse checks, not full integrity checks. They do not hash model
 contents or verify every prepared output. If you replace model contents while
 preserving size and modification time, use a fresh `PREPARED_DIR`.
 
-If preparation inputs change, a pack is damaged, or an older marker is
-unrecognized, the helper never deletes or overwrites the existing pack. Use
-`--build-only` if you only need updated binaries. To regenerate packs, set
-`PREPARED_DIR` in `.env` to a fresh directory and rerun without `--build-only`.
-Markers from the previous combined-fingerprint scheme are not automatically
-trusted or upgraded. An unrecognized marker alone does not establish that the
-pack is unusable.
+After `git pull`, changed preparation inputs or old completion markers produce
+a warning, not a fatal error. The helper reuses the pack without changing its
+files or marker, so the warning remains on subsequent runs. This includes
+missing markers and markers from the previous combined-fingerprint scheme.
+The warning does not prove a pack is broken or certify that it is compatible.
+Some problems may only appear during model loading or inference, including
+unexpected output. Use a separate `PREPARED_DIR` for each model rather than
+relying on warnings to switch between models.
+
+Missing or empty required pack files are concrete failures and still stop
+preparation, as do compiler, packer, and input-acquisition failures.
+`--build-only` skips all pack checks if you only need updated binaries.
+
+If a reused pack causes runtime problems, or required outputs are missing or
+damaged, stop the server, set `PREPARED_DIR` in `.env` to a fresh directory, and
+rerun without `--build-only`. Keep the old prepared directory until the new
+packs work, then remove it if no longer needed. Keep the original model shards
+and raw MTP tensors; neither needs deleting to regenerate packs. The helper
+never deletes or overwrites an existing pack merely because its marker changed.
 
 Failed preparation stages leave hidden temporary directories beneath
 `PREPARED_DIR` for inspection. Reruns create a new temporary directory; they do
