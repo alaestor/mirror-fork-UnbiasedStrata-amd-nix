@@ -214,6 +214,7 @@ The default development shell and preparation/fetch checks also include Python. 
 ## Edits to upstream files
 
 - [CMakeLists.txt](CMakeLists.txt): guard absent optional HIP sources, link strata-poly's HIP MMQ target to hipBLAS, and build sampling tests.
+- [HIP compatibility header](include/strata/hip_compat/cuda_runtime.h): map strata-poly's blocking synchronization calls to HIP.
 - [Makefile](Makefile): run sampling policy and HTTP regression tests.
 - [Frontend entry point](frontend/main.cpp): preserve explicit presence-penalty overrides.
 - [Frontend context](frontend/strata_context.cpp) and [interface](frontend/strata_context.hpp): select model-card sampling defaults with server and request overrides.

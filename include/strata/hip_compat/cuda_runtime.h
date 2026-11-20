@@ -26,6 +26,7 @@
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
 #define cudaDeviceDisablePeerAccess hipDeviceDisablePeerAccess
 #define cudaDeviceProp hipDeviceProp_t
+#define cudaDeviceScheduleBlockingSync hipDeviceScheduleBlockingSync
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaDriverGetVersion hipDriverGetVersion
 #define cudaErrorNotReady hipErrorNotReady
@@ -152,6 +153,7 @@ inline hipError_t mem_get_info(size_t* free_bytes, size_t* total_bytes) {
 #define cudaPeekAtLastError hipPeekAtLastError
 #define cudaRuntimeGetVersion hipRuntimeGetVersion
 #define cudaSetDevice hipSetDevice
+#define cudaSetDeviceFlags hipSetDeviceFlags
 #define cudaStreamBeginCapture hipStreamBeginCapture
 #define cudaStreamCaptureModeThreadLocal hipStreamCaptureModeThreadLocal
 #define cudaStreamCaptureStatus hipStreamCaptureStatus
