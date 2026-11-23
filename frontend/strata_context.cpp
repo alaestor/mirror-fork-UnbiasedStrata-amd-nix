@@ -5,6 +5,11 @@
 
 #include "strata_context.hpp"
 #include "engine.hpp"
+#include "hy4_vocab.hpp"
+#include "inkling.hpp"
+#ifdef STRATA_INKLING_PACK
+#include "inkling_vocab.hpp"
+#endif
 #include "literals.hpp"
 #include "picture_cache.hpp"
 #include "sampling_defaults.hpp"
@@ -21,6 +26,7 @@
 #include "llama.h"
 #include "log.h"
 #include "gguf.h"
+#include "ggml-cpp.h"
 #include "ggml-backend.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
@@ -29,6 +35,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 #include <set>
 #include <chrono>
@@ -39,6 +46,13 @@ using strata_frontend::Engine;
 using strata_frontend::EngineLine;
 
 namespace {
+
+// Hy4's template accepts three effort strings (Strata terminal/serve/hy4_dialect.py).
+std::string hy4_effort(const std::string & effort) {
+    if (effort == "none" || effort == "no_think" || effort == "off" || effort == "disabled" || effort == "false") return "no_think";
+    if (effort == "max" || effort == "xhigh" || effort == "maximum") return "max";
+    return "high";
+}
 
 // how long update_slots() waits for an engine line before returning to the queue (which then sees cancels)
 constexpr int ENGINE_POLL_MS = 20;
@@ -195,6 +209,7 @@ struct strata_context_impl {
     // (literals.hpp, USTRAT-14)
     strata_frontend::Literals literals;
 
+    bool                         inkling_chat = false;
     server_chat_params           chat_params;
     std::map<std::string, bool>  chat_caps;
     std::vector<llama_logit_bias> logit_bias_eog; // empty: the engine applies logit bias itself
@@ -209,10 +224,22 @@ struct strata_context_impl {
     std::string              engine_exe;
     std::vector<std::string> engine_args;
     bool                     engine_is_poly = false;
+    bool                     engine_is_hy4 = false;
+    bool                     engine_is_ik2 = false;
+    bool                     engine_is_inkling_metal = false;
+
     long long                n_ctx = 0;
+    std::atomic<bool>        stopping{false};
     std::atomic<bool>        engine_dead{false};
 
     Slot slot;
+
+    const char * engine_name() const {
+        if (engine_is_hy4) return "strata-hy4";
+        if (engine_is_inkling_metal) return "strata-inkling";
+        if (engine_is_ik2) return "strata-ik2";
+        return engine_is_poly ? "strata-poly" : "strata";
+    }
 
     // ---- queue callbacks -------------------------------------------------------------------------------------------
 
@@ -326,10 +353,12 @@ struct strata_context_impl {
         } else {
             ids = t.tokens.get_text_tokens();
         }
-        const long long room = n_ctx - n_prompt - ENGINE_CONTEXT_RESERVE;
+        // Both Hy4 backends reserve one position in their native serve loop.
+        const int reserve = engine_is_hy4 ? 1 : ENGINE_CONTEXT_RESERVE;
+        const long long room = n_ctx - n_prompt - reserve;
         if (room <= 0) {
             send_error(t, string_format("the request exceeds the available context size: %d prompt tokens, context %lld (%d kept back)",
-                                        n_prompt, n_ctx, ENGINE_CONTEXT_RESERVE), ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                        n_prompt, n_ctx, reserve), ERROR_TYPE_EXCEED_CONTEXT_SIZE);
             slot.release();
             return;
         }
@@ -374,8 +403,10 @@ struct strata_context_impl {
         if (s.temp > 0.0f) {
             std::snprintf(b, sizeof b, " temperature=%g", (double) s.temp); h += b;
             if (s.top_p > 0.0f && s.top_p < 1.0f) { std::snprintf(b, sizeof b, " top_p=%g", (double) s.top_p); h += b; }
-            // strata's sampled path takes top_k in 1..64; 0 means "whole vocabulary" to llama.cpp
-            int32_t top_k = s.top_k <= 0 ? 64 : std::min<int32_t>(s.top_k, 64);
+            // Hy4 supports the whole vocabulary. Inkling bounds sampling to its candidate buffer.
+            int32_t top_k = std::max<int32_t>(0, s.top_k);
+            if (engine_is_inkling_metal && top_k == 0) top_k = 128;
+            if (!engine_is_hy4 && !engine_is_ik2 && !engine_is_inkling_metal) top_k = top_k == 0 ? 64 : std::min<int32_t>(top_k, 64);
             std::snprintf(b, sizeof b, " top_k=%d", top_k); h += b;
             if (s.min_p > 0.0f) { std::snprintf(b, sizeof b, " min_p=%g", (double) s.min_p); h += b; }
             if (s.seed != LLAMA_DEFAULT_SEED) { std::snprintf(b, sizeof b, " seed=%u", s.seed); h += b; }
@@ -387,7 +418,7 @@ struct strata_context_impl {
                           (double) s.penalty_repeat, (double) s.penalty_freq, (double) s.penalty_present);
             h += b;
         }
-        if (!s.logit_bias.empty() && !engine_is_poly) {
+        if (!s.logit_bias.empty() && !engine_is_poly && !engine_is_hy4) {
             std::string lb = " logit_bias=";
             for (size_t i = 0; i < s.logit_bias.size(); ++i) {
                 if (i) lb += ',';
@@ -416,6 +447,7 @@ struct strata_context_impl {
     // <|image_pad|> token (a model family whose picture placeholders this front end does not know yet).
     bool init_vision(const common_params & p, std::string & err) {
         int32_t proj_width = 0;
+        std::string projector_type;
         {
             gguf_init_params gp{ /* no_alloc */ true, /* ctx */ nullptr };
             gguf_context * gg = gguf_init_from_file(p.mmproj.path.c_str(), gp);
@@ -426,6 +458,10 @@ struct strata_context_impl {
             const int64_t k = gguf_find_key(gg, "clip.vision.projection_dim");
             if (k >= 0) {
                 proj_width = (int32_t) gguf_get_val_u32(gg, k);
+            }
+            const int64_t type_key = gguf_find_key(gg, "clip.vision.projector_type");
+            if (type_key >= 0 && gguf_get_kv_type(gg, type_key) == GGUF_TYPE_STRING) {
+                projector_type = gguf_get_val_str(gg, type_key);
             }
             gguf_free(gg);
         }
@@ -449,9 +485,15 @@ struct strata_context_impl {
                                 proj_width, want, p.mmproj.path.c_str());
             return false;
         }
-        const llama_tokens pad = common_tokenize(vocab, "<|image_pad|>", false, true);
+        const bool inkling = std::string_view(arch) == "inkling2";
+        if (inkling != (projector_type == "inkling2v")) {
+            err = "the vision projector type " + projector_type + " does not match the model architecture " + arch;
+            return false;
+        }
+        const char * pad_text = inkling ? "<|unused_200054|>" : "<|image_pad|>";
+        const llama_tokens pad = common_tokenize(vocab, pad_text, false, true);
         if (pad.size() != 1) {
-            err = "the model has no <|image_pad|> token; pictures are supported for the Qwen family only so far";
+            err = std::string("the model has no image placeholder token ") + pad_text;
             return false;
         }
         if (p.mmproj_use_gpu && ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU) == nullptr) {
@@ -765,9 +807,12 @@ struct strata_context_impl {
             } else {
                 result.text_to_send = "";
             }
-            if (slot.task->params.stream) {
-                send_partial_response(result, false, false);
-            }
+        } else {
+            // A token can end mid-character. Its ID is ready even while its text is buffered.
+            result.text_to_send.clear();
+        }
+        if (slot.task->params.stream && (!incomplete || slot.task->params.return_tokens)) {
+            send_partial_response(result, false, false);
         }
 
         if (slot.stats.n_gen > 0 && slot.has_next_token && !slot.has_budget()) {
@@ -958,7 +1003,7 @@ struct strata_context_impl {
                 {"vocab_type",  llama_vocab_type(vocab)},
                 {"n_vocab",     llama_vocab_n_tokens(vocab)},
                 {"n_ctx",       n_ctx},
-                {"engine",      engine_is_poly ? "strata-poly" : "strata"},
+                {"engine",      engine_name()},
             }},
         };
     }
@@ -1105,6 +1150,23 @@ struct strata_context_impl {
                 json::object(), chat_params.enable_thinking, chat_params.chat_template_kwargs);
             strata_frontend::fill_sampling_defaults(resolved, sampling_defaults(thinking));
             task.params = server_schema::eval_llama_cmpl_schema(vocab, params, logit_bias_eog, resolved);
+            if (engine_is_hy4 && (!task.params.sampling.logit_bias.empty() || data.value("ignore_eos", false))) {
+                throw std::invalid_argument("Hy4 does not implement logit_bias or ignore_eos");
+            }
+            if (engine_is_ik2 || engine_is_inkling_metal) {
+                const auto & s = task.params.sampling;
+                if (!s.logit_bias.empty() || data.value("ignore_eos", false)) {
+                    throw std::invalid_argument("Inkling does not implement logit_bias or ignore_eos");
+                }
+                if (engine_is_ik2 && s.penalty_last_n != 0 &&
+                    (s.penalty_repeat != 1.0f || s.penalty_present != 0.0f || s.penalty_freq != 0.0f)) {
+                    throw std::invalid_argument("Inkling CUDA does not implement repetition, presence, or frequency penalties");
+                }
+                const int limit = engine_is_ik2 ? 1000 : 128;
+                if (s.top_k > limit) {
+                    throw std::invalid_argument("Inkling top_k exceeds the engine limit of " + std::to_string(limit));
+                }
+            }
             if (task.params.n_cmpl > 1) {
                 throw std::invalid_argument("n > 1 is not supported by this server");
             }
@@ -1122,10 +1184,11 @@ struct strata_context_impl {
             return res;
         }
 
+        const auto should_stop = [this, &req] { return stopping.load() || req.should_stop(); };
         const bool stream = json_value(data, "stream", false);
 
         if (!stream) {
-            auto all_results = rd.wait_for_all(req.should_stop);
+            auto all_results = rd.wait_for_all(should_stop);
             if (all_results.is_terminated) {
                 return res; // connection closed
             } else if (all_results.error) {
@@ -1140,9 +1203,9 @@ struct strata_context_impl {
         }
 
         // streaming: the first error is a plain (non-stream) error response, as OpenAI does
-        auto first_result = rd.next(req.should_stop);
+        auto first_result = rd.next(should_stop);
         if (first_result == nullptr) {
-            GGML_ASSERT(req.should_stop());
+            GGML_ASSERT(should_stop());
             return res;
         }
         if (first_result->is_error()) {
@@ -1166,14 +1229,14 @@ struct strata_context_impl {
         }
         res->status       = 200;
         res->content_type = "text/event-stream";
-        res->set_next([res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
+        res->set_next([this, res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({{"event", "error"}, {"data", res_json}});
                 }
                 return format_oai_sse(json {{ "error", res_json }});
             };
-            auto effective_should_stop = [&res_this]() { return res_this->should_stop(); };
+            auto effective_should_stop = [this, res_this]() { return stopping.load() || res_this->should_stop(); };
 
             try {
                 if (effective_should_stop()) {
@@ -1257,9 +1320,42 @@ bool strata_context::start_engine(const common_params & params, const std::strin
     impl->engine_args = engine_args;
     impl->engine_is_poly = engine_exe.find("strata-poly") != std::string::npos;
 
+    const std::filesystem::path checkpoint(params.model.path);
+    const bool is_pack = checkpoint.extension() == ".strata";
+#ifdef STRATA_INKLING_PACK
+    if (is_pack && !identify_inkling_pack(checkpoint.string(), impl->engine_is_inkling_metal, err)) return false;
+#endif
+    impl->engine_is_hy4 = is_pack && !impl->engine_is_inkling_metal;
     std::vector<std::string> argv;
     argv.push_back(engine_exe);
     argv.push_back("--serve");
+    if (is_pack) {
+        // The child must execute the same pack whose vocabulary the front end reads.
+        for (size_t i = 0; i < engine_args.size(); ++i) {
+            if ((engine_args[i] == "--model" || engine_args[i] == "--native") &&
+                (i + 1 == engine_args.size() || engine_args[i + 1] != checkpoint)) {
+                err = "for .strata packs, -m selects the checkpoint for both the front end and the runner";
+                return false;
+            }
+        }
+    }
+    if (impl->engine_is_inkling_metal) {
+        argv.insert(argv.end(), {"--native", checkpoint.string()});
+    }
+    if (impl->engine_is_hy4) {
+#ifndef STRATA_HY4_VOCAB
+        err = "rebuild the front end with libzstd development files to read .strata checkpoints";
+        return false;
+#endif
+        if (!params.mmproj.path.empty()) {
+            err = "Hy4 text serving accepts a text checkpoint and its Engram shard";
+            return false;
+        }
+        argv.insert(argv.end(), {"--model", checkpoint.string()});
+        if (std::find(engine_args.begin(), engine_args.end(), "--engram") == engine_args.end()) {
+            argv.insert(argv.end(), {"--engram", (checkpoint.parent_path() / "Hy4-Flash-Engram-Q8.strata").string()});
+        }
+    }
     for (const auto & a : engine_args) {
         argv.push_back(a);
     }
@@ -1272,28 +1368,71 @@ void strata_context::set_picture_cache(size_t entries, size_t bytes) {
 
 bool strata_context::load(common_params & params, std::string & err, bool presence_penalty_override) {
     auto & I = *impl;
+    if (I.engine_is_hy4) {
+        auto & defaults = params.default_template_kwargs;
+        if (defaults.count("enable_thinking") && defaults.at("enable_thinking") == "false") {
+            defaults["reasoning_effort"] = json("no_think").dump();
+        } else if (defaults.count("reasoning_effort")) {
+            auto effort = json::parse(defaults.at("reasoning_effort"));
+            if (!effort.is_string()) {
+                err = "Hy4 reasoning_effort must be a string";
+                return false;
+            }
+            defaults["reasoning_effort"] = json(hy4_effort(effort.get<std::string>())).dump();
+        }
+    }
     I.params = params;
     I.presence_penalty_override = presence_penalty_override;
 
     // the vocabulary and the chat template, from the GGUF's metadata; no tensor is read
     llama_model_params mparams = llama_model_default_params();
     mparams.vocab_only = true;
-    I.model = llama_model_load_from_file(params.model.path.c_str(), mparams);
-    if (I.model == nullptr) {
+#ifdef STRATA_HY4_VOCAB
+    if (I.engine_is_hy4) {
+        I.model = load_hy4_vocab(params.model.path, mparams, err);
+
+    } else
+#endif
+#ifdef STRATA_INKLING_PACK
+    if (I.engine_is_inkling_metal) {
+        I.model = load_inkling_vocab(params.model.path, mparams, err);
+        if (!I.model) return false;
+    } else
+#endif
+    {
+        I.model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    }
+    if (I.model == nullptr && !I.engine_is_hy4) {
         // An architecture this llama.cpp does not know (GLM 5.3 Flash's file says "glm5-next", from neurall's fork)
         // still has an ordinary vocabulary and chat template; the engine, not llama.cpp, runs the tensors. A
         // vocabulary-only load reads nothing architecture-specific, so the name is overridden to one llama.cpp knows.
         LOG_WRN("vocabulary load failed; retrying with general.architecture overridden to \"llama\" (vocabulary only)\n");
-        llama_model_kv_override ov[2] = {};
+        llama_model_kv_override ov[3] = {};
         snprintf(ov[0].key, sizeof(ov[0].key), "%s", "general.architecture");
         ov[0].tag = LLAMA_KV_OVERRIDE_TYPE_STR;
         snprintf(ov[0].val_str, sizeof(ov[0].val_str), "%s", "llama");
-        ov[1].key[0] = 0;
+        // Inkling 2 uses o200k's Unicode-mark-aware split and whole-piece BPE hits.
+        // The pinned llama.cpp exposes this combination under its Granite embedding pre-tokenizer.
+        gguf_context_ptr meta(gguf_init_from_file(params.model.path.c_str(), {true, nullptr}));
+        auto meta_string = [&](const char * key) -> std::string {
+            int64_t id = meta ? gguf_find_key(meta.get(), key) : -1;
+            return id >= 0 && gguf_get_kv_type(meta.get(), id) == GGUF_TYPE_STRING
+                ? gguf_get_val_str(meta.get(), id) : "";
+        };
+        if (meta_string("general.architecture") == "inkling2") {
+            const std::string pre = meta_string("tokenizer.ggml.pre");
+            if (pre == "inkling2" || pre == "inkling" || pre == "gpt-4o") {
+                snprintf(ov[1].key, sizeof(ov[1].key), "%s", "tokenizer.ggml.pre");
+                ov[1].tag = LLAMA_KV_OVERRIDE_TYPE_STR;
+                snprintf(ov[1].val_str, sizeof(ov[1].val_str), "%s", "granite-embed-multi-97m");
+            }
+        }
+        meta.reset();
         mparams.kv_overrides = ov;
         I.model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     }
     if (I.model == nullptr) {
-        err = "could not read the vocabulary from " + params.model.path;
+        if (err.empty()) err = "could not read the vocabulary from " + params.model.path;
         return false;
     }
     I.vocab      = llama_model_get_vocab(I.model);
@@ -1321,7 +1460,24 @@ bool strata_context::load(common_params & params, std::string & err, bool presen
         common_chat_templates_ptr chat_templates;
         bool enable_thinking = false;
         try {
-            chat_templates = common_chat_templates_init(I.model, params.chat_template);
+            std::string chat_template = params.chat_template;
+            const char * embedded = llama_model_chat_template(I.model, nullptr);
+            const std::string_view source = chat_template.empty() && embedded
+                ? std::string_view(embedded) : std::string_view(chat_template);
+            I.inkling_chat = params.use_jinja && source.find("<|content_invoke_tool_json|>") != source.npos &&
+                             source.find("<|content_thinking|>") != source.npos;
+            if (I.inkling_chat) {
+                if (chat_template.empty()) chat_template = embedded;
+                // The pinned Jinja supports compact JSON separators. The template
+                // already constructs the tool descriptor's fields in sorted order.
+                string_replace_all(chat_template, "tojson(sort_keys=true, ", "tojson(");
+                // Hand the opaque request marker through to mtmd so it consumes the
+                // corresponding file; keep the image in its own Inkling message.
+                string_replace_all(chat_template, "part.type in (\"image\",", "part.type in (\"media_marker\", \"image\",");
+                string_replace_all(chat_template, "\"<|content_image|><|unused_200054|><|end_message|>\"",
+                    "\"<|content_image|>\" ~ (part.text if part.type == 'media_marker' else '<|unused_200054|>') ~ \"<|end_message|>\"");
+            }
+            chat_templates = common_chat_templates_init(I.model, chat_template);
             LOG_INF("chat template, example_format: '%s'\n",
                     common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs).c_str());
             const bool template_supports_thinking = params.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
@@ -1356,6 +1512,9 @@ bool strata_context::load(common_params & params, std::string & err, bool presen
         err = "engine: " + eerr;
         return false;
     }
+    const auto & info = I.engine.info();
+    I.engine_is_inkling_metal = info.count("engine_kind") && info.at("engine_kind") == "inkling-metal";
+    I.engine_is_ik2 = info.count("engine_kind") && info.at("engine_kind") == "ik2";
     I.n_ctx = I.engine.max_context() > 0 ? I.engine.max_context() : params.n_ctx;
     if (I.n_ctx <= 0) {
         err = "the engine did not report its context size and -c was not given";
@@ -1383,10 +1542,17 @@ void strata_context::start_loop() {
     impl->queue_tasks.start_loop();
 }
 
-void strata_context::terminate() {
+void strata_context::stop_loop() {
+    impl->stopping.store(true);
     impl->queue_tasks.terminate();
-    impl->queue_results.terminate();
+}
+
+void strata_context::terminate() {
     impl->engine.quit();
+    if (impl->mctx) {
+        mtmd_free(impl->mctx);
+        impl->mctx = nullptr;
+    }
     if (impl->model) {
         llama_model_free(impl->model);
         impl->model = nullptr;
@@ -1450,7 +1616,7 @@ void strata_context::init_routes(server_http_context & http) {
             {"chat_template", common_chat_templates_source(I->chat_params.tmpls.get())},
             {"chat_template_caps", caps},
             {"build_info", std::string(llama_build_info())},
-            {"engine", I->engine_is_poly ? "strata-poly" : "strata"},
+            {"engine", I->engine_name()},
         });
         return res;
     };
@@ -1458,15 +1624,43 @@ void strata_context::init_routes(server_http_context & http) {
     // a control token's text inside a message stays text (literals.hpp): marked before the template renders,
     // unmarked after, and the spans it covered are tokenized as text
     auto parse_chat = [I](json & body, std::vector<raw_buffer> & files, std::vector<std::pair<size_t, size_t>> & plain) {
+        if (I->engine_is_hy4) {
+            auto kwargs = body.value("chat_template_kwargs", json::object());
+            std::string effort = json_value(body, "reasoning_effort", json_value(kwargs, "reasoning_effort", std::string()));
+            if (!kwargs.value("enable_thinking", true)) effort = "no_think";
+            if (!effort.empty()) {
+                body["reasoning_effort"] = hy4_effort(effort);
+                body["chat_template_kwargs"]["enable_thinking"] = body["reasoning_effort"] != "no_think";
+            }
+        }
         bool marked = false;
         if (body.contains("messages")) {
             json * tools = body.contains("tools") ? &body.at("tools") : nullptr;
             marked = I->literals.mark_request(body.at("messages"), tools);
         }
+        // The generic server translates effort "none" into enable_thinking=false.
+        // Inkling's template reads the effort itself and renders it as level zero.
+        const bool no_thinking = I->inkling_chat &&
+            strata_frontend::prepare_inkling_chat(body, I->params.default_template_kwargs);
         json data = oaicompat_chat_params_parse(body, I->chat_params, files);
         const bool thinking = strata_frontend::sampling_thinking(
             body, I->chat_params.enable_thinking, I->chat_params.chat_template_kwargs);
         strata_frontend::fill_sampling_defaults(data, I->sampling_defaults(thinking));
+        if (I->inkling_chat && !I->params.force_pure_content_parser) {
+            auto tools = body.value("tools", json::array());
+            if (body.value("tool_choice", json("auto")) == "none") tools.clear();
+            auto format = body.contains("reasoning_format")
+                ? common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>())
+                : I->chat_params.reasoning_format;
+            strata_frontend::inkling_chat_parser(data, tools, format != COMMON_REASONING_FORMAT_NONE);
+            // Open the text block for effort zero. With tools the first block may be a call.
+            if (no_thinking && tools.empty() && data.value("generation_prompt", std::string()).empty() &&
+                body.value("add_generation_prompt", true)) {
+                const std::string prefix = "<|message_model|><|content_text|>";
+                data["prompt"] = data.at("prompt").get<std::string>() + prefix;
+                data["generation_prompt"] = prefix;
+            }
+        }
         if (marked) {
             std::string prompt = data.at("prompt").get<std::string>();
             plain = I->literals.unmark(prompt);

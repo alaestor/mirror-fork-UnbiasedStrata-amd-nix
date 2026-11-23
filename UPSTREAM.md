@@ -4,10 +4,14 @@
 
 | What | Where | Version |
 | --- | --- | --- |
+| Hy4-Flash text runner, S-quant codecs and native container reader | [Niko1221/Strata](https://github.com/Niko1221/Strata/tree/6e38f588a646c0ee6948a74afbe670eb75896106/engine/src/hy4flash) | `6e38f588a646c0ee6948a74afbe670eb75896106`. Build changes, file mapping and measurements are in [docs/HY4.md](docs/HY4.md). |
 | Engines (`strata`, `strata-poly`), tools, docs | https://github.com/VecSzn/PolyStrata | tag `v0.1.45-poly.1`, commit `d0cd84dc6bd009d1d9e2191e4e28cc76b80f1ee3` |
 | ggml, llama, common, mtmd, cpp-httplib | https://github.com/robertkarl/llama.cpp, branch `UnbiasedStrata`, as the submodule `third_party/llama.cpp` | commit `385445fad49e42fa718b5e1f71668f35b7a08559`: ggml-org `3cf03257f219afbe7334045ff7c6a06ac68c627d` (the commit upstream pins) plus the six parser commits below |
 | DeepSeek-V4.1 engine (`strata-dsv41`: `src/dsv41`, `include/strata/dsv41`, `tests/dsv41`, `tools/dsv41`, `data/dsv41`, `tools/trellis/tqenc.*`), the trellis and `iq*x_rows` CPU kernels it needs | https://github.com/Niko1221/Strata | tag `v0.2.4`, commit `96ca4383` (2026-10-24); see "DeepSeek-V4.1 engine" below |
 | llama.cpp's DeepSeek V4.1 chat template detection and DSML parser | https://github.com/ggml-org/llama.cpp pull 30817, head `b72050d0` | the `common/chat.cpp`, `common/chat.h`, `common/parsers/deepseek.cpp` hunks only, as commit `44072a1` on the submodule branch `deepseek41-parser` (on `385445f`) |
+| Inkling 2 Mini CUDA engine | [Project Maya fork](https://github.com/alesha-pro/maya-inkling-mini/tree/e819852f822479af783638a467bfdfe2ed6882ec) | `src/ik2`, integrated with the GGUF shard reader and the front-end protocol |
+| Inkling 2 Mini Metal engine | [Strata v0.2.19](https://github.com/Niko1221/Strata/tree/c6f6427d9de9016fd92d13e29740f65625261df7/engine/src/inkling2) | `third_party/strata-inkling`, the native Metal runner, SQ reader, codecs and dependencies. The fork accepts projected image rows from the front end and bounds multi-row logit requests to its output buffer. |
+| Inkling 2 vision projector | [llama.cpp b12590](https://github.com/ggml-org/llama.cpp/tree/34ff2e047ce520b1d83bd274bf3ff0bfbc72a69b/tools/mtmd) | mtmd backport and typed image blocks on the llama.cpp submodule branch `strata-inkling2-vision`, commit `db1f382bb` |
 
 Commit `0197ae86` ("Import PolyStrata v0.1.45-poly.1 (d0cd84dc) unmodified") is the upstream tree, every tracked
 file, with the same tree hash as upstream's commit. `git diff 0197ae86 HEAD` is the whole story of this fork;

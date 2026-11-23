@@ -60,8 +60,8 @@
           llamaSource = pkgs.fetchFromGitHub {
             owner = "robertkarl";
             repo = "llama.cpp";
-            rev = "44072a19fb94d0bed63d381d42f6237373f91d54";
-            hash = "sha256-dMGOaTb6D3PTwVoeU4Yz72quMtJRhuxONF+8kZuOfpQ=";
+            rev = "db1f382bb25f9cc481893105dbead09c86a52f01";
+            hash = "sha256-Him+wiXA84lA638Ltql3Guzr5FEEe+CbTgN+0SXr9ng=";
           };
           strata = pkgs.stdenv.mkDerivation {
             pname = "unbiased-strata-hip";
@@ -506,13 +506,14 @@
               "-DSTRATA_BUILD_TESTS=OFF"
             ];
             buildPhase = ''
-              cmake --build . --target unbiased-strata engine_test literals_test picture_cache_test sampling_defaults_test --parallel 4
+              cmake --build . --target unbiased-strata engine_test literals_test picture_cache_test hy4_sampling_test sampling_defaults_test --parallel 4
             '';
             doCheck = true;
             checkPhase = ''
               ./engine_test "$PWD/../frontend/tests/fake-engine.py"
               ./literals_test
               ./picture_cache_test
+              ./hy4_sampling_test
               ./sampling_defaults_test
               python3 ../frontend/tests/sampling-defaults-e2e.py "$PWD/unbiased-strata"
               bash ../frontend/tests/e2e.sh "$PWD/unbiased-strata"

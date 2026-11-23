@@ -30,7 +30,7 @@ PREPARED_DIR=packs/qwen38
 MTP_SOURCE=mtp/qwen38-source
 VENV=.venv
 JOBS=4
-LLAMA_REV=385445fad49e42fa718b5e1f71668f35b7a08559
+LLAMA_REV=
 COMPAT_BF16=0
 
 die() { echo "$*" >&2; exit 1; }
@@ -65,10 +65,12 @@ if [[ -e third_party/llama.cpp/.git ]]; then
 fi
 git submodule update --init third_party/llama.cpp
 [[ -z $(git -C third_party/llama.cpp status --porcelain) ]] || die 'llama.cpp has local changes; refusing checkout.'
-if ! git -C third_party/llama.cpp cat-file -e "$LLAMA_REV^{commit}" 2>/dev/null; then
-  git -C third_party/llama.cpp fetch origin "$LLAMA_REV"
+if [[ -n "$LLAMA_REV" ]]; then
+  if ! git -C third_party/llama.cpp cat-file -e "$LLAMA_REV^{commit}" 2>/dev/null; then
+    git -C third_party/llama.cpp fetch origin "$LLAMA_REV"
+  fi
+  git -C third_party/llama.cpp checkout --detach "$LLAMA_REV"
 fi
-git -C third_party/llama.cpp checkout --detach "$LLAMA_REV"
 if ! cmake "${fresh[@]}" -S . -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF \
   -DSTRATA_BUILD_TESTS=OFF -DSTRATA_PORTABLE=ON \

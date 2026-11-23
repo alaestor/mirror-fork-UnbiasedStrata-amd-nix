@@ -184,9 +184,10 @@ an SSH disconnect. Use a persistent terminal such as `tmux` if needed.
 
 The explicit launch command below is an alternative that does not read `.env`.
 
-The script pins llama.cpp to the revision used by the flake and refuses local
-changes in that submodule. It installs Python dependencies in `.venv/` without
-changing system Python. CMake must discover ROCm's `clang++` as its HIP compiler,
+By default the script uses the tracked llama.cpp submodule revision, which the
+Strata flake build also uses. It refuses local changes in the submodule. It
+installs Python dependencies in `.venv/` without changing system Python.
+CMake must discover ROCm's `clang++` as its HIP compiler,
 not the `hipcc` wrapper. If discovery fails, inspect the configure error before
 changing compiler paths.
 

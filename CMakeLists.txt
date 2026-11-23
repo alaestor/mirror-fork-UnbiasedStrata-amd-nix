@@ -9,6 +9,11 @@
 # and is wrong about its own performance, which is the worst of both outcomes.
 cmake_minimum_required(VERSION 3.24)
 project(strata VERSION 0.1.45 LANGUAGES CXX)
+
+option(STRATA_BUILD_IK2 "Build the native Inkling 2 engine for CUDA or Apple Silicon Metal" OFF)
+if(STRATA_BUILD_IK2 AND APPLE)
+  enable_language(C OBJCXX OBJC)
+endif()
 # EXPERIMENTAL: the Intel Arc engine, the SYCL port in sycl/ (PR #423; icpx + oneMKL, docs/INTEL_ARC.md). It is its
 # own project that takes the unported sources from src/; with this on, nothing below is configured.
 option(STRATA_ENABLE_SYCL "EXPERIMENTAL: build the Intel Arc (SYCL) engine from sycl/ - docs/INTEL_ARC.md" OFF)
@@ -2168,6 +2173,16 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
   endif()
 endif()
 
+if(STRATA_BUILD_IK2)
+  if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    add_subdirectory(third_party/strata-inkling/src/inkling2)
+  elseif(STRATA_ENABLE_CUDA AND NOT STRATA_HIP_GFX906)
+    add_subdirectory(src/ik2)
+  else()
+    message(FATAL_ERROR "Inkling requires Apple Silicon Metal or NVIDIA CUDA on Linux x86-64")
+  endif()
+endif()
+
 # ---- strata-dsv41: DeepSeek-V4.1-Flash, from Strata v0.2.4 (UPSTREAM.md "DeepSeek-V4.1 engine") ----------------
 #
 # The third engine.  Imported from Niko1221/Strata v0.2.4 (src/dsv41, include/strata/dsv41, tests/dsv41, tools/dsv41,
@@ -2285,7 +2300,25 @@ if(STRATA_FRONTEND AND STRATA_NATIVE_EXPERTS)
   add_executable(unbiased-strata frontend/main.cpp frontend/strata_context.cpp)
   target_include_directories(unbiased-strata PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/frontend)
   target_link_libraries(unbiased-strata PRIVATE strata_llama_server)
+  if(TARGET strata_inkling_metal)
+    target_sources(unbiased-strata PRIVATE frontend/inkling_vocab.cpp)
+    target_include_directories(unbiased-strata PRIVATE include)
+    target_compile_definitions(unbiased-strata PRIVATE STRATA_INKLING_PACK=1)
+  endif()
   target_compile_features(unbiased-strata PRIVATE cxx_std_20)
+  find_path(ZSTD_INCLUDE_DIR zstd.h)
+  find_library(ZSTD_LIBRARY zstd)
+  if(TARGET strata_zstd_dec)
+    target_link_libraries(unbiased-strata PRIVATE strata_zstd_dec)
+  elseif(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
+    target_include_directories(unbiased-strata PRIVATE ${ZSTD_INCLUDE_DIR})
+    target_link_libraries(unbiased-strata PRIVATE ${ZSTD_LIBRARY})
+  endif()
+  if(TARGET strata_zstd_dec OR (ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY))
+    target_sources(unbiased-strata PRIVATE frontend/hy4_vocab.cpp src/artifact/strata_reader.cpp)
+    target_include_directories(unbiased-strata PRIVATE include)
+    target_compile_definitions(unbiased-strata PRIVATE STRATA_HY4_VOCAB)
+  endif()
 
   # The engine adapter against the fake engine (frontend/tests/fake-engine.py): no GPU, no model, no llama.cpp.
   # `make test` builds and runs it, then frontend/tests/e2e.sh against the binary above.
@@ -2295,6 +2328,8 @@ if(STRATA_FRONTEND AND STRATA_NATIVE_EXPERTS)
 
   # The literal marking (frontend/literals.hpp) over llama.cpp's vendored nlohmann json, which has the same interface
   # as common_json: no model, no llama.cpp library.
+  add_executable(hy4_sampling_test EXCLUDE_FROM_ALL frontend/tests/hy4_sampling_test.cpp)
+  target_compile_features(hy4_sampling_test PRIVATE cxx_std_17)
   add_executable(literals_test EXCLUDE_FROM_ALL frontend/tests/literals_test.cpp)
   target_include_directories(literals_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/frontend ${STRATA_GGML_DIR}/vendor)
   target_compile_features(literals_test PRIVATE cxx_std_20)
