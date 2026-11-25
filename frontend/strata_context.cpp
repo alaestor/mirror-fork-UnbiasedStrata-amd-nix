@@ -1419,7 +1419,8 @@ bool strata_context::load(common_params & params, std::string & err, bool presen
             return id >= 0 && gguf_get_kv_type(meta.get(), id) == GGUF_TYPE_STRING
                 ? gguf_get_val_str(meta.get(), id) : "";
         };
-        if (meta_string("general.architecture") == "inkling2") {
+        const std::string arch = meta_string("general.architecture");
+        if (arch == "inkling2" || arch == "inkling2_loop") {
             const std::string pre = meta_string("tokenizer.ggml.pre");
             if (pre == "inkling2" || pre == "inkling" || pre == "gpt-4o") {
                 snprintf(ov[1].key, sizeof(ov[1].key), "%s", "tokenizer.ggml.pre");

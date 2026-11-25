@@ -14,6 +14,7 @@
     inputs@{ flake-parts, nix-hug, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" ];
+      imports = [ ./nix/inkling.nix ];
       perSystem =
         { pkgs, system, ... }:
         let

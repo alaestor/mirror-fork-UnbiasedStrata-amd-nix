@@ -6,7 +6,7 @@ include_toc: true
 
 A personal fork of [robertkarl/UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata), which combines [Strata](https://github.com/Niko1221/Strata)'s inference engine with a C++ OpenAI-style API server and llama.cpp's tokenizer and chat templates. Strata places model experts across GPU memory, host RAM, and file-backed storage.
 
-This fork packages that engine for AMD through HIP in a Nix flake, with support for gfx1100 (AMD 7900 XTX) and option model downloads via the "all-in-one" packages. The model implementations and memory-tiering logic are inherited from UnbiasedStrata.
+This fork packages that engine for AMD through HIP in a Nix flake, with support for gfx1100 (AMD 7900 XTX) and optional model downloads via the "all-in-one" packages. The Qwen model implementations and memory-tiering logic are inherited from UnbiasedStrata.
 
 ## Requirements and tested scope
 
@@ -89,6 +89,11 @@ option allocates a blocker rather than leaving the memory free.
 systemctl --user show strata-qwen38 -p MemoryCurrent -p MemoryPeak -p MemorySwapCurrent
 systemctl --user stop strata-qwen38
 ```
+
+### Inkling 2 Mini
+
+`nix run .#inkling` uses Niko1221's native HIP engine with local GGUF weights.
+See the [Inkling guide](docs/inkling.md) for setup on Nix and openSUSE.
 
 ### Configuration and API
 
@@ -217,7 +222,7 @@ The default development shell and preparation/fetch checks also include Python. 
 - [HIP compatibility header](include/strata/hip_compat/cuda_runtime.h): map strata-poly's blocking synchronization calls to HIP.
 - [Makefile](Makefile): run sampling policy and HTTP regression tests.
 - [Frontend entry point](frontend/main.cpp): preserve explicit presence-penalty overrides.
-- [Frontend context](frontend/strata_context.cpp) and [interface](frontend/strata_context.hpp): select model-card sampling defaults with server and request overrides.
+- [Frontend context](frontend/strata_context.cpp) and [interface](frontend/strata_context.hpp): select model-card sampling defaults with server and request overrides, and recognize the Inkling loop GGUF when loading its vocabulary.
 - [Fake engine](frontend/tests/fake-engine.py): capture engine requests for sampling regression tests.
 - [GPU parity diagnostic](src/kernels/native_expert_parity.cpp): report FP16 signed-zero differences separately from weight mismatches.
 - [.gitignore](.gitignore): ignore local `.env` and Nix result links.

@@ -376,7 +376,7 @@ GGUF shards and generated packs; it does not need the raw tensors.
 
 The launcher requires a working systemd user manager and cgroup v2 memory
 control. It checks memory-controller files inside the service before loading
-weights; see [memory controller setup](../packaging/README.md#memory-controller-setup)
+weights; see [memory controller setup](../packaging/TROUBLESHOOT.md#memory-controller-setup)
 if startup fails. Model shards are not hashed during local preparation; use a
 fresh output directory when replacing them.
 

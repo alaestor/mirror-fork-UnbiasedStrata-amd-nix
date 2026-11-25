@@ -18,13 +18,20 @@ VOCAB = HERE.parent.parent / "third_party/llama.cpp/models/ggml-vocab-qwen35.ggu
 BIN = str(Path(sys.argv[1]).resolve())
 
 
+def replace_gguf_string(data, key, value):
+    key = key.encode()
+    pos = data.index(struct.pack("<Q", len(key)) + key + struct.pack("<I", 8)) + 8 + len(key) + 4
+    size = struct.unpack_from("<Q", data, pos)[0]
+    return data[:pos] + struct.pack("<Q", len(value)) + value.encode() + data[pos + 8 + size:]
+
+
 def fixture(path, arch):
     data = VOCAB.read_bytes()
     assert struct.unpack_from("<Q", data, 8)[0] == 0, "fixture must have no tensors"
-    key = b"general.architecture"
-    pos = data.index(struct.pack("<Q", len(key)) + key + struct.pack("<I", 8)) + 8 + len(key) + 4
-    size = struct.unpack_from("<Q", data, pos)[0]
-    path.write_bytes(data[:pos] + struct.pack("<Q", len(arch)) + arch.encode() + data[pos + 8 + size:])
+    data = replace_gguf_string(data, "general.architecture", arch)
+    if arch == "inkling2_loop":
+        data = replace_gguf_string(data, "tokenizer.ggml.pre", "inkling2")
+    path.write_bytes(data)
 
 
 @contextlib.contextmanager
@@ -122,5 +129,8 @@ with tempfile.TemporaryDirectory(prefix="strata-sampling-") as tmp:
     with server(work, "qwen35") as request:
         got = request()
         assert got["temperature"] == .8 and got["top_k"] == 40 and got["min_p"] == .05, got
+    # A new-layout Inkling GGUF needs the Inkling tokenizer fallback before chat can reach the engine.
+    with server(work, "inkling2_loop") as request:
+        assert request({"temperature": .5})["temperature"] == .5
 
-print("PASS: model-card defaults, derivative metadata, thinking modes, server/request overrides, raw completions")
+print("PASS: sampling defaults and overrides, raw completions, Inkling tokenizer fallback")
