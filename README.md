@@ -4,6 +4,10 @@ include_toc: true
 
 # UnbiasedStrata on Nix + AMD
 
+> **Development has moved.** This fork is no longer developed or kept in sync
+> with upstream. Use [inferenix](https://git.0x04.cc/alaestor/inferenix) for
+> ongoing AMD inference packaging.
+
 A personal fork of [robertkarl/UnbiasedStrata](https://github.com/robertkarl/UnbiasedStrata), which combines [Strata](https://github.com/Niko1221/Strata)'s inference engine with a C++ OpenAI-style API server and llama.cpp's tokenizer and chat templates. Strata places model experts across GPU memory, host RAM, and file-backed storage.
 
 This fork packages that engine for AMD through HIP in a Nix flake, with support for gfx1100 (AMD 7900 XTX) and optional model downloads via the "all-in-one" packages. The Qwen model implementations and memory-tiering logic are inherited from UnbiasedStrata.
